@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync --extra all-providers)",
+      "Bash(python3 -m uv run mypy awaf/)",
+      "Bash(python3 -m uv run pytest tests/ -m \"not integration\" -x -v)",
+      "Bash(python3 -m uv run ruff format --check .)",
+      "Bash(python3 -m uv run ruff check .)",
+      "Bash(python3 -m uv run pytest tests/ -m \"not integration\" -x)"
+    ]
+  }
+}
