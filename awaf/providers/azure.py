@@ -8,7 +8,6 @@ from awaf.providers.base import (
     ProviderAuthError,
     ProviderConfig,
     ProviderConfigError,
-    ProviderError,
     ProviderRateLimitError,
     ProviderResponse,
     ProviderTimeoutError,
@@ -39,7 +38,7 @@ class AzureOpenAIProvider(LLMProvider):
         try:
             import openai  # noqa: F401
         except ImportError as exc:
-            raise ProviderError(
+            raise ProviderConfigError(
                 "Provider 'azure' requires additional dependencies. Run: pip install awaf[azure]",
                 provider=self.config.provider_name,
                 model=self.config.model,

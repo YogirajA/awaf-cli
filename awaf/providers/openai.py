@@ -7,7 +7,7 @@ from awaf.providers.base import (
     LLMProvider,
     ProviderAuthError,
     ProviderConfig,
-    ProviderError,
+    ProviderConfigError,
     ProviderRateLimitError,
     ProviderResponse,
     ProviderTimeoutError,
@@ -51,15 +51,13 @@ class OpenAIProvider(LLMProvider):
         try:
             import openai  # noqa: F401
         except ImportError as exc:
-            raise ProviderError(
+            raise ProviderConfigError(
                 "Provider 'openai' requires additional dependencies. Run: pip install awaf[openai]",
                 provider=self.config.provider_name,
                 model=self.config.model,
             ) from exc
 
         if not self.config.api_key:
-            from awaf.providers.base import ProviderConfigError
-
             raise ProviderConfigError(
                 "OpenAI provider requires an API key. Set OPENAI_API_KEY or api_key in awaf.toml.",
                 provider=self.config.provider_name,

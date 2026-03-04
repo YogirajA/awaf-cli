@@ -64,7 +64,7 @@ def resolve_provider_config(
 
     # --- optional params ---
     max_tokens: int = int(toml_provider.get("max_tokens", 4096))
-    temperature: float = float(toml_provider.get("temperature", 0.5))
+    temperature: float = float(toml_provider.get("temperature", 0.0))
     timeout_seconds: int = int(toml_provider.get("timeout", 120))
 
     # --- Azure-specific ---

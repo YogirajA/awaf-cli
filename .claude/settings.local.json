@@ -6,7 +6,8 @@
       "Bash(python3 -m uv run pytest tests/ -m \"not integration\" -x -v)",
       "Bash(python3 -m uv run ruff format --check .)",
       "Bash(python3 -m uv run ruff check .)",
-      "Bash(python3 -m uv run pytest tests/ -m \"not integration\" -x)"
+      "Bash(python3 -m uv run pytest tests/ -m \"not integration\" -x)",
+      "Bash(gh repo view YogirajA/awaf-skill --json description,readme,defaultBranchRef)"
     ]
   }
 }

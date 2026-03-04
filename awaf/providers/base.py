@@ -15,7 +15,7 @@ class ProviderConfig:
     model: str  # full model string, e.g. "gpt-4o", "claude-opus-4-5"
     api_key: str  # resolved from env var
     max_tokens: int = 4096
-    temperature: float = 0.5
+    temperature: float = 0.0
     timeout_seconds: int = 120
     max_retries: int = 3
     # Azure-specific (ignored by non-Azure adapters)
