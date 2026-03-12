@@ -108,7 +108,10 @@ def run_assessment(
         # Useful for avoiding rate limits on low-tier API plans.
         for i, agent in enumerate(agents):
             if i > 0 and pillar_delay_seconds > 0:
-                logger.debug("Waiting %.0fs before next pillar (rate-limit delay).", pillar_delay_seconds)
+                logger.debug(
+                    "Waiting %.0fs before next pillar (rate-limit delay).",
+                    pillar_delay_seconds,
+                )
                 time.sleep(pillar_delay_seconds)
             try:
                 result = agent.evaluate(provider, artifact_content)
