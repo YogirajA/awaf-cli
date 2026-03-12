@@ -50,7 +50,6 @@ class GoogleProvider(LLMProvider):
             )
 
     def complete(self, system_prompt: str, user_prompt: str) -> ProviderResponse:
-        import google.api_core.exceptions
         from google import genai
         from google.genai import types
 
@@ -68,24 +67,9 @@ class GoogleProvider(LLMProvider):
                     max_output_tokens=self.config.max_tokens,
                 ),
             )
-        except google.api_core.exceptions.ResourceExhausted as exc:
-            raise ProviderRateLimitError(
-                str(exc),
-                provider=self.config.provider_name,
-                model=model_name,
-            ) from exc
-        except google.api_core.exceptions.Unauthenticated as exc:
-            raise ProviderAuthError(
-                str(exc),
-                provider=self.config.provider_name,
-                model=model_name,
-            ) from exc
-        except google.api_core.exceptions.DeadlineExceeded as exc:
-            raise ProviderTimeoutError(
-                str(exc),
-                provider=self.config.provider_name,
-                model=model_name,
-            ) from exc
+        except Exception as exc:
+            self._raise_provider_error(exc, model_name)
+            raise  # unreachable; satisfies type checker
 
         latency_ms = int((time.monotonic() - t0) * 1000)
 
@@ -113,3 +97,24 @@ class GoogleProvider(LLMProvider):
             return int(result.total_tokens or 0)
         except Exception:
             return max(1, len(text) // 4)
+
+    def _raise_provider_error(self, exc: Exception, model_name: str) -> None:
+        """Map google-genai SDK exceptions to provider exceptions."""
+        # status code is 'code' in google.genai.errors, may also be 'status_code'
+        code = int(getattr(exc, "code", 0) or getattr(exc, "status_code", 0) or 0)
+        name = type(exc).__name__
+        msg = str(exc)
+
+        if code == 429 or name in ("ResourceExhausted", "RateLimitError"):
+            raise ProviderRateLimitError(
+                msg, provider=self.config.provider_name, model=model_name
+            ) from exc
+        if code in (401, 403) or name in ("Unauthenticated", "PermissionDenied"):
+            raise ProviderAuthError(
+                msg, provider=self.config.provider_name, model=model_name
+            ) from exc
+        if isinstance(exc, TimeoutError) or name in ("DeadlineExceeded", "TimeoutError"):
+            raise ProviderTimeoutError(
+                msg, provider=self.config.provider_name, model=model_name
+            ) from exc
+        raise ProviderError(msg, provider=self.config.provider_name, model=model_name) from exc

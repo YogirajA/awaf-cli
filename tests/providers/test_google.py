@@ -39,6 +39,23 @@ def _mock_genai_response(text: str = "Gemini response") -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
+# SDK-agnostic error stubs (avoids google.api_core dependency in tests)
+# ---------------------------------------------------------------------------
+
+
+class _RateLimitError(Exception):
+    code = 429
+
+
+class _AuthError(Exception):
+    code = 401
+
+
+class _TimeoutError(TimeoutError):
+    pass
+
+
+# ---------------------------------------------------------------------------
 # 1. Happy path
 # ---------------------------------------------------------------------------
 
@@ -64,13 +81,9 @@ def test_complete_happy_path() -> None:
 
 
 def test_complete_rate_limit() -> None:
-    import google.api_core.exceptions
-
     with patch("google.genai.Client") as mock_client_cls:
         mock_client = mock_client_cls.return_value
-        mock_client.models.generate_content.side_effect = (
-            google.api_core.exceptions.ResourceExhausted("quota exceeded")
-        )
+        mock_client.models.generate_content.side_effect = _RateLimitError("quota exceeded")
 
         provider = GoogleProvider(_cfg())
         with pytest.raises(ProviderRateLimitError) as exc_info:
@@ -85,13 +98,9 @@ def test_complete_rate_limit() -> None:
 
 
 def test_complete_auth_error() -> None:
-    import google.api_core.exceptions
-
     with patch("google.genai.Client") as mock_client_cls:
         mock_client = mock_client_cls.return_value
-        mock_client.models.generate_content.side_effect = (
-            google.api_core.exceptions.Unauthenticated("bad key")
-        )
+        mock_client.models.generate_content.side_effect = _AuthError("bad key")
 
         provider = GoogleProvider(_cfg())
         with pytest.raises(ProviderAuthError):
@@ -104,13 +113,9 @@ def test_complete_auth_error() -> None:
 
 
 def test_complete_timeout() -> None:
-    import google.api_core.exceptions
-
     with patch("google.genai.Client") as mock_client_cls:
         mock_client = mock_client_cls.return_value
-        mock_client.models.generate_content.side_effect = (
-            google.api_core.exceptions.DeadlineExceeded("timed out")
-        )
+        mock_client.models.generate_content.side_effect = _TimeoutError("timed out")
 
         provider = GoogleProvider(_cfg())
         with pytest.raises(ProviderTimeoutError):
