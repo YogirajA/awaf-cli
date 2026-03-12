@@ -108,6 +108,8 @@ tests/
 
 ## Things Claude Gets Wrong Here
 
+- **Version bumps require two files.** When bumping `version` in `pyproject.toml`, also update the static AWAF Score badge line in `README.md` (search for `AWAF%20Score`) if the score has changed, and commit both files together. PyPI badge is dynamic — no change needed there.
+- **Do not bump version and tag separately.** Bump `pyproject.toml`, commit, tag, push in one sequence. Tagging a commit before bumping the version means PyPI publishes the old version string.
 - **Do not `pip install` anything.** Always `uv add <package>` to add deps to `pyproject.toml`, or `uv run` to execute.
 - **Do not use `black` or `isort`.** `ruff format` handles formatting; `ruff check --fix` handles import sorting.
 - **Azure adapter uses `azure_deployment` for the API call, not `config.model`.** `config.model` is display-only for Azure.
