@@ -15,7 +15,7 @@ from awaf.providers.base import (
 
 
 class GoogleProvider(LLMProvider):
-    """Adapter for Google Gemini via google-generativeai SDK."""
+    """Adapter for Google Gemini via google-genai SDK."""
 
     def __init__(self, config: ProviderConfig) -> None:
         super().__init__(config)
@@ -34,7 +34,7 @@ class GoogleProvider(LLMProvider):
 
     def validate_config(self) -> None:
         try:
-            import google.generativeai  # noqa: F401
+            import google.genai  # noqa: F401
         except ImportError as exc:
             raise ProviderError(
                 "Provider 'google' requires additional dependencies. Run: pip install awaf[google]",
@@ -51,27 +51,22 @@ class GoogleProvider(LLMProvider):
 
     def complete(self, system_prompt: str, user_prompt: str) -> ProviderResponse:
         import google.api_core.exceptions
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
 
-        genai.configure(api_key=self.config.api_key)  # type: ignore[attr-defined]
+        client = genai.Client(api_key=self.config.api_key)
         model_name = self.config.model or self.default_model
-
-        gmodel = genai.GenerativeModel(  # type: ignore[attr-defined]
-            model_name,
-            system_instruction=system_prompt,
-        )
-
-        # GenerationConfig accepts a dict via the GenerationConfigDict protocol
-        generation_config = genai.types.GenerationConfig(
-            temperature=self.config.temperature,
-            max_output_tokens=self.config.max_tokens,
-        )
 
         t0 = time.monotonic()
         try:
-            response = gmodel.generate_content(
-                user_prompt,
-                generation_config=generation_config,
+            response = client.models.generate_content(
+                model=model_name,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=self.config.temperature,
+                    max_output_tokens=self.config.max_tokens,
+                ),
             )
         except google.api_core.exceptions.ResourceExhausted as exc:
             raise ProviderRateLimitError(
@@ -96,25 +91,25 @@ class GoogleProvider(LLMProvider):
 
         content = response.text if response.text else ""
         usage = response.usage_metadata
+        candidates = response.candidates or []
 
         return ProviderResponse(
             content=content,
-            input_tokens=usage.prompt_token_count if usage else 0,
-            output_tokens=usage.candidates_token_count if usage else 0,
+            input_tokens=int(usage.prompt_token_count or 0) if usage else 0,
+            output_tokens=int(usage.candidates_token_count or 0) if usage else 0,
             model=model_name,
             provider=self.config.provider_name,
             latency_ms=latency_ms,
-            raw={"candidates": [str(c) for c in response.candidates]},
+            raw={"candidates": [str(c) for c in candidates]},
         )
 
     def count_tokens(self, text: str) -> int:
         try:
-            import google.generativeai as genai
+            from google import genai
 
-            genai.configure(api_key=self.config.api_key)  # type: ignore[attr-defined]
+            client = genai.Client(api_key=self.config.api_key)
             model_name = self.config.model or self.default_model
-            gmodel = genai.GenerativeModel(model_name)  # type: ignore[attr-defined]
-            result = gmodel.count_tokens(text)
-            return int(result.total_tokens)
+            result = client.models.count_tokens(model=model_name, contents=text)
+            return int(result.total_tokens or 0)
         except Exception:
             return max(1, len(text) // 4)

@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy import Column, DateTime, Engine, Float, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session
 
 _DEFAULT_DB_URL = "sqlite:///./awaf.db"
@@ -74,11 +75,15 @@ class _Assessment(_Base):
     model = Column(String, nullable=False, default="claude-opus-4-5")
 
     # Rich report sections stored as JSON text (populated by pillar agents)
-    evidence_reviewed = Column(Text, nullable=False, default="[]")   # JSON list of artifact names
-    evidence_gaps = Column(Text, nullable=False, default="[]")        # JSON list of gap dicts
-    findings = Column(Text, nullable=False, default="[]")             # JSON list of finding dicts
-    recommendations = Column(Text, nullable=False, default="[]")      # JSON list of recommendation dicts
-    improve_suggestions = Column(Text, nullable=False, default="[]")  # JSON list of improvement suggestions
+    evidence_reviewed = Column(Text, nullable=False, default="[]")  # JSON list of artifact names
+    evidence_gaps = Column(Text, nullable=False, default="[]")  # JSON list of gap dicts
+    findings = Column(Text, nullable=False, default="[]")  # JSON list of finding dicts
+    recommendations = Column(
+        Text, nullable=False, default="[]"
+    )  # JSON list of recommendation dicts
+    improve_suggestions = Column(
+        Text, nullable=False, default="[]"
+    )  # JSON list of improvement suggestions
 
     # Total tokens consumed and estimated USD cost for this run
     total_input_tokens = Column(Integer, nullable=False, default=0)
@@ -140,10 +145,10 @@ class AssessmentRecord:
     estimated_cost_usd: float = 0.0
 
 
-_engine = None
+_engine: Engine | None = None
 
 
-def _init_engine():  # type: ignore[return]
+def _init_engine() -> Engine:
     global _engine
     if _engine is None:
         _engine = create_engine(_db_url(), connect_args={"check_same_thread": False})
@@ -155,7 +160,7 @@ def _to_record(row: _Assessment) -> AssessmentRecord:
     return AssessmentRecord(
         id=int(row.id),
         project_name=str(row.project_name or ""),
-        created_at=row.created_at or datetime.now(UTC),
+        created_at=row.created_at if isinstance(row.created_at, datetime) else datetime.now(UTC),
         commit_hash=str(row.commit_hash or ""),
         branch=str(row.branch or ""),
         pr_number=str(row.pr_number or ""),
@@ -165,26 +170,38 @@ def _to_record(row: _Assessment) -> AssessmentRecord:
         note=str(row.note or ""),
         # Scores
         foundation_score=float(row.foundation_score) if row.foundation_score is not None else None,
-        op_excellence_score=float(row.op_excellence_score) if row.op_excellence_score is not None else None,
+        op_excellence_score=float(row.op_excellence_score)
+        if row.op_excellence_score is not None
+        else None,
         security_score=float(row.security_score) if row.security_score is not None else None,
-        reliability_score=float(row.reliability_score) if row.reliability_score is not None else None,
-        performance_score=float(row.performance_score) if row.performance_score is not None else None,
+        reliability_score=float(row.reliability_score)
+        if row.reliability_score is not None
+        else None,
+        performance_score=float(row.performance_score)
+        if row.performance_score is not None
+        else None,
         cost_score=float(row.cost_score) if row.cost_score is not None else None,
-        sustainability_score=float(row.sustainability_score) if row.sustainability_score is not None else None,
+        sustainability_score=float(row.sustainability_score)
+        if row.sustainability_score is not None
+        else None,
         reasoning_score=float(row.reasoning_score) if row.reasoning_score is not None else None,
-        controllability_score=float(row.controllability_score) if row.controllability_score is not None else None,
-        context_integrity_score=float(row.context_integrity_score) if row.context_integrity_score is not None else None,
-        # Confidence
-        foundation_confidence=row.foundation_confidence,
-        op_excellence_confidence=row.op_excellence_confidence,
-        security_confidence=row.security_confidence,
-        reliability_confidence=row.reliability_confidence,
-        performance_confidence=row.performance_confidence,
-        cost_confidence=row.cost_confidence,
-        sustainability_confidence=row.sustainability_confidence,
-        reasoning_confidence=row.reasoning_confidence,
-        controllability_confidence=row.controllability_confidence,
-        context_integrity_confidence=row.context_integrity_confidence,
+        controllability_score=float(row.controllability_score)
+        if row.controllability_score is not None
+        else None,
+        context_integrity_score=float(row.context_integrity_score)
+        if row.context_integrity_score is not None
+        else None,
+        # Confidence — cast from Column[str] to str | None (nullable columns)
+        foundation_confidence=cast("str | None", row.foundation_confidence),
+        op_excellence_confidence=cast("str | None", row.op_excellence_confidence),
+        security_confidence=cast("str | None", row.security_confidence),
+        reliability_confidence=cast("str | None", row.reliability_confidence),
+        performance_confidence=cast("str | None", row.performance_confidence),
+        cost_confidence=cast("str | None", row.cost_confidence),
+        sustainability_confidence=cast("str | None", row.sustainability_confidence),
+        reasoning_confidence=cast("str | None", row.reasoning_confidence),
+        controllability_confidence=cast("str | None", row.controllability_confidence),
+        context_integrity_confidence=cast("str | None", row.context_integrity_confidence),
         # Rich sections
         evidence_reviewed=str(row.evidence_reviewed or "[]"),
         evidence_gaps=str(row.evidence_gaps or "[]"),

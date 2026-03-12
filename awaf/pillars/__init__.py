@@ -43,7 +43,7 @@ ALL_AGENTS: list[PillarAgent] = [
 class AssessmentResult:
     pillar_results: list[PillarResult] = field(default_factory=list)
     overall_score: float = 0.0
-    foundation_passed: bool = True    # False if Foundation < 40
+    foundation_passed: bool = True  # False if Foundation < 40
     budget_exceeded: bool = False
     total_input_tokens: int = 0
     total_output_tokens: int = 0
@@ -90,8 +90,7 @@ def run_assessment(
         agents = [a for a in ALL_AGENTS if pillar_filter.lower() in a.name.lower()]
         if not agents:
             raise ValueError(
-                f"No pillar matches '{pillar_filter}'. "
-                f"Valid names: {[a.name for a in ALL_AGENTS]}"
+                f"No pillar matches '{pillar_filter}'. Valid names: {[a.name for a in ALL_AGENTS]}"
             )
 
     results: list[PillarResult] = []
@@ -136,13 +135,15 @@ def run_assessment(
                     for f, a in futures.items():
                         if not f.done():
                             f.cancel()
-                            results.append(PillarResult(
-                                name=a.name,
-                                score=0.0,
-                                confidence="budget_exceeded",
-                                skipped=True,
-                                skip_reason="session budget exceeded",
-                            ))
+                            results.append(
+                                PillarResult(
+                                    name=a.name,
+                                    score=0.0,
+                                    confidence="budget_exceeded",
+                                    skipped=True,
+                                    skip_reason="session budget exceeded",
+                                )
+                            )
                     break
 
     # Re-order results to match ALL_AGENTS order for consistent display
@@ -151,7 +152,7 @@ def run_assessment(
 
     overall = compute_overall_score(results)
     foundation = next((r for r in results if r.name == "Foundation"), None)
-    foundation_passed = (foundation is None or foundation.score >= 40)
+    foundation_passed = foundation is None or foundation.score >= 40
 
     total_in = sum(r.input_tokens for r in results)
     total_out = sum(r.output_tokens for r in results)

@@ -4,6 +4,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
 
 from awaf.providers.base import LLMProvider
 from awaf.retry import with_retry
@@ -14,13 +15,14 @@ logger = logging.getLogger(__name__)
 # Result dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PillarResult:
     name: str
-    score: float                                    # 0–100
-    confidence: str                                 # verified | partial | self_reported
-    findings: list[dict] = field(default_factory=list)       # [{"severity":..., "detail":...}]
-    recommendations: list[dict] = field(default_factory=list)# [{"detail":...}]
+    score: float  # 0–100
+    confidence: str  # verified | partial | self_reported
+    findings: list[dict[str, Any]] = field(default_factory=list)  # [{"severity":..., "detail":...}]
+    recommendations: list[dict[str, Any]] = field(default_factory=list)  # [{"detail":...}]
     evidence_gaps: list[str] = field(default_factory=list)
     improve_suggestions: list[str] = field(default_factory=list)
     input_tokens: int = 0
@@ -81,6 +83,7 @@ Return ONLY valid JSON (no markdown fences, no commentary before or after) with 
 # Abstract base
 # ---------------------------------------------------------------------------
 
+
 class PillarAgent(ABC):
     """
     Abstract base for all 10 AWAF pillar agents.
@@ -140,7 +143,9 @@ class PillarAgent(ABC):
                 name=self.name,
                 score=0.0,
                 confidence="self_reported",
-                findings=[{"severity": "High", "detail": f"LLM response could not be parsed: {exc}"}],
+                findings=[
+                    {"severity": "High", "detail": f"LLM response could not be parsed: {exc}"}
+                ],
                 evidence_gaps=["LLM response was not valid JSON; re-run to retry"],
             )
 

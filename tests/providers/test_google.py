@@ -44,12 +44,9 @@ def _mock_genai_response(text: str = "Gemini response") -> MagicMock:
 
 
 def test_complete_happy_path() -> None:
-    with (
-        patch("google.generativeai.configure"),
-        patch("google.generativeai.GenerativeModel") as mock_model_cls,
-    ):
-        mock_model = mock_model_cls.return_value
-        mock_model.generate_content.return_value = _mock_genai_response("Hi from Gemini!")
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.models.generate_content.return_value = _mock_genai_response("Hi from Gemini!")
 
         provider = GoogleProvider(_cfg())
         result = provider.complete("sys", "usr")
@@ -69,13 +66,10 @@ def test_complete_happy_path() -> None:
 def test_complete_rate_limit() -> None:
     import google.api_core.exceptions
 
-    with (
-        patch("google.generativeai.configure"),
-        patch("google.generativeai.GenerativeModel") as mock_model_cls,
-    ):
-        mock_model = mock_model_cls.return_value
-        mock_model.generate_content.side_effect = google.api_core.exceptions.ResourceExhausted(
-            "quota exceeded"
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.models.generate_content.side_effect = (
+            google.api_core.exceptions.ResourceExhausted("quota exceeded")
         )
 
         provider = GoogleProvider(_cfg())
@@ -93,13 +87,10 @@ def test_complete_rate_limit() -> None:
 def test_complete_auth_error() -> None:
     import google.api_core.exceptions
 
-    with (
-        patch("google.generativeai.configure"),
-        patch("google.generativeai.GenerativeModel") as mock_model_cls,
-    ):
-        mock_model = mock_model_cls.return_value
-        mock_model.generate_content.side_effect = google.api_core.exceptions.Unauthenticated(
-            "bad key"
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.models.generate_content.side_effect = (
+            google.api_core.exceptions.Unauthenticated("bad key")
         )
 
         provider = GoogleProvider(_cfg())
@@ -115,13 +106,10 @@ def test_complete_auth_error() -> None:
 def test_complete_timeout() -> None:
     import google.api_core.exceptions
 
-    with (
-        patch("google.generativeai.configure"),
-        patch("google.generativeai.GenerativeModel") as mock_model_cls,
-    ):
-        mock_model = mock_model_cls.return_value
-        mock_model.generate_content.side_effect = google.api_core.exceptions.DeadlineExceeded(
-            "timed out"
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.models.generate_content.side_effect = (
+            google.api_core.exceptions.DeadlineExceeded("timed out")
         )
 
         provider = GoogleProvider(_cfg())
@@ -138,12 +126,9 @@ def test_count_tokens() -> None:
     mock_count = MagicMock()
     mock_count.total_tokens = 4
 
-    with (
-        patch("google.generativeai.configure"),
-        patch("google.generativeai.GenerativeModel") as mock_model_cls,
-    ):
-        mock_model = mock_model_cls.return_value
-        mock_model.count_tokens.return_value = mock_count
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.models.count_tokens.return_value = mock_count
 
         provider = GoogleProvider(_cfg())
         count = provider.count_tokens("hello world")

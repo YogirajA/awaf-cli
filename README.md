@@ -1,7 +1,10 @@
 # awaf-cli
 The reference implementation of the AWAF open specification. Catch agent architecture regressions before they ship.
 
-Implements AWAF Score &nbsp;|&nbsp; PyPI &nbsp;|&nbsp; License
+[![CI](https://github.com/YogirajA/awaf-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/YogirajA/awaf-cli/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/awaf)](https://pypi.org/project/awaf/)
+[![Python](https://img.shields.io/pypi/pyversions/awaf)](https://pypi.org/project/awaf/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 Runs in CI on every PR that touches agent code. Scores across 10 architectural pillars defined by the AWAF open specification. Fails the build when something regresses.
 
@@ -15,7 +18,7 @@ No dashboards that need a legend. No compliance jargon. One number per pillar, o
 pip install awaf
 ```
 
-Requires Python 3.12+. Bring your own model and API key.
+Requires Python 3.11+. Bring your own model and API key.
 
 ---
 

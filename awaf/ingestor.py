@@ -5,30 +5,52 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 _SUPPORTED_EXTS = {
-    ".py", ".ts", ".tsx", ".js", ".jsx",
-    ".go", ".java", ".rs", ".rb", ".cs",
-    ".yaml", ".yml", ".json", ".toml",
-    ".md", ".rst", ".txt",
-    ".tf", ".hcl",           # Terraform / HCL
-    ".dockerfile", ".sh",
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".go",
+    ".java",
+    ".rs",
+    ".rb",
+    ".cs",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".toml",
+    ".md",
+    ".rst",
+    ".txt",
+    ".tf",
+    ".hcl",  # Terraform / HCL
+    ".dockerfile",
+    ".sh",
 }
 
-_MAX_FILE_BYTES = 200_000   # skip files over 200 KB
+_MAX_FILE_BYTES = 200_000  # skip files over 200 KB
 _DEFAULT_MAX_TOKENS = int(os.environ.get("AWAF_MAX_ARTIFACTS_TOKENS", "40000"))
 
 _DEFAULT_EXCLUDE = [
-    ".git", ".venv", "venv", "node_modules", "__pycache__",
-    ".mypy_cache", ".ruff_cache", "dist", "build",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
 ]
 
 
 @dataclass
 class IngestorResult:
-    content: str                              # concatenated artifact text
-    files_scanned: list[str] = field(default_factory=list)   # relative paths analyzed
-    files_skipped: list[str] = field(default_factory=list)   # skipped paths with reason
+    content: str  # concatenated artifact text
+    files_scanned: list[str] = field(default_factory=list)  # relative paths analyzed
+    files_skipped: list[str] = field(default_factory=list)  # skipped paths with reason
     total_tokens: int = 0
-    truncated: bool = False                   # True when token limit cut off remaining files
+    truncated: bool = False  # True when token limit cut off remaining files
 
 
 def ingest(
@@ -100,10 +122,7 @@ def _walk(base: str, excludes: set[str]) -> list[str]:
     results: list[str] = []
     for dirpath, dirnames, filenames in os.walk(base):
         # Prune excluded directories in-place so os.walk skips them
-        dirnames[:] = [
-            d for d in dirnames
-            if d not in excludes and not d.startswith(".")
-        ]
+        dirnames[:] = [d for d in dirnames if d not in excludes and not d.startswith(".")]
         for fname in filenames:
             ext = os.path.splitext(fname)[1].lower()
             if ext in _SUPPORTED_EXTS or fname.lower() in {"dockerfile", "makefile"}:

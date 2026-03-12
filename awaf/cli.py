@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import sys
 import tomllib
@@ -13,6 +14,11 @@ from awaf.providers.base import ProviderConfigError
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Ensure Unicode output works on Windows (cp1252 terminals reject box-drawing chars)
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 _SEP = "━" * 40
 _IS_TTY = sys.stdout.isatty()
@@ -183,12 +189,20 @@ def run(
     branch = ""
     if ci:
         try:
-            commit_hash = subprocess.check_output(
-                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
-            ).decode().strip()
-            branch = subprocess.check_output(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL
-            ).decode().strip()
+            commit_hash = (
+                subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+                )
+                .decode()
+                .strip()
+            )
+            branch = (
+                subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL
+                )
+                .decode()
+                .strip()
+            )
         except Exception:
             pass
 
@@ -244,8 +258,10 @@ def run(
     click.echo(f"\nAWAF Assessment: {project_name}")
     click.echo(f"AWAF v1.0  |  {_today()}")
     click.echo(_SEP)
-    click.echo(f"  Overall Score    {int(assessment.overall_score)}  "
-               f"{_readiness_label(assessment.overall_score)}")
+    click.echo(
+        f"  Overall Score    {int(assessment.overall_score)}  "
+        f"{_readiness_label(assessment.overall_score)}"
+    )
     click.echo(f"  Provider         {config.provider_name} / {effective_model}")
     click.echo()
 
@@ -291,8 +307,8 @@ def run(
     if all_recs:
         click.echo()
         click.echo("  RECOMMENDATIONS")
-        for r in all_recs:
-            click.echo(f"  {r.get('pillar', ''):<18}  {r.get('detail', '')}")
+        for rec in all_recs:
+            click.echo(f"  {rec.get('pillar', ''):<18}  {rec.get('detail', '')}")
         click.echo(_SEP)
 
     if all_improvements:
@@ -352,13 +368,15 @@ def run(
 
     # Threshold checks → exit code
     tier2_scores = [
-        r.score for r in assessment.pillar_results
+        r.score
+        for r in assessment.pillar_results
         if r.name in {"Reasoning Integ.", "Controllability", "Context Integrity"} and not r.skipped
     ]
     tier2_avg = sum(tier2_scores) / len(tier2_scores) if tier2_scores else 100.0
 
     # Regression check against most recent previous run
     from awaf.db import get_recent_assessments as _get_recent
+
     prev = _get_recent(project_name, limit=2)
     regressed = False
     if len(prev) >= 2:
@@ -366,8 +384,8 @@ def run(
         delta = previous_score - assessment.overall_score
         if delta >= regression_limit:
             click.echo(
-                f"  WARNING: score dropped {int(delta)} points "
-                f"(limit: {regression_limit})", err=True
+                f"  WARNING: score dropped {int(delta)} points (limit: {regression_limit})",
+                err=True,
             )
             regressed = True
 
@@ -385,6 +403,7 @@ def run(
 def _print_run_pillars(assessment: object) -> None:
     """Render the pillar score table for awaf run output."""
     from awaf.pillars import AssessmentResult
+
     assert isinstance(assessment, AssessmentResult)
 
     click.echo("  TIER 0: FOUNDATION")
@@ -394,7 +413,14 @@ def _print_run_pillars(assessment: object) -> None:
 
     click.echo()
     click.echo("  TIER 1: CLOUD WAF ADAPTED")
-    tier1 = ["Op. Excellence", "Security", "Reliability", "Performance", "Cost Optim.", "Sustainability"]
+    tier1 = [
+        "Op. Excellence",
+        "Security",
+        "Reliability",
+        "Performance",
+        "Cost Optim.",
+        "Sustainability",
+    ]
     for r in assessment.pillar_results:
         if r.name in tier1:
             _print_pillar_row(r, r.name, "score", "confidence")
@@ -410,6 +436,7 @@ def _print_run_pillars(assessment: object) -> None:
 def _any_agent_files_changed(patterns: list[str]) -> bool:
     """Return True if any files matching patterns are in the git diff."""
     import subprocess
+
     try:
         diff = subprocess.check_output(
             ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
@@ -417,15 +444,15 @@ def _any_agent_files_changed(patterns: list[str]) -> bool:
         ).decode()
         changed = set(diff.splitlines())
         import fnmatch
-        return any(
-            fnmatch.fnmatch(f, pat) for f in changed for pat in patterns
-        )
+
+        return any(fnmatch.fnmatch(f, pat) for f in changed for pat in patterns)
     except Exception:
-        return True   # can't determine; proceed with assessment
+        return True  # can't determine; proceed with assessment
 
 
 def _today() -> str:
     from datetime import UTC, datetime
+
     return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
@@ -451,10 +478,12 @@ def providers() -> None:
         click.echo(f"  {name:<12}{model_display:<22}{symbol} {status_text}")
 
     click.echo()
-    active_model = active_config.model or dict(
-        (n, m) for n, m, _ in _PROVIDER_TABLE
-    ).get(active_config.provider_name, "")
-    click.echo(f"Active provider (from awaf.toml): {active_config.provider_name} / {active_model or '—'}")
+    active_model = active_config.model or dict((n, m) for n, m, _ in _PROVIDER_TABLE).get(
+        active_config.provider_name, ""
+    )
+    click.echo(
+        f"Active provider (from awaf.toml): {active_config.provider_name} / {active_model or '—'}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +492,9 @@ def providers() -> None:
 
 
 @cli.command()
-@click.option("--project", default=None, metavar="NAME", help="Project name (default: from awaf.toml).")
+@click.option(
+    "--project", default=None, metavar="NAME", help="Project name (default: from awaf.toml)."
+)
 @click.option("--limit", default=5, show_default=True, help="Number of assessments to show.")
 def history(project: str | None, limit: int) -> None:
     """Show recent assessment history for the current project."""
@@ -477,7 +508,9 @@ def history(project: str | None, limit: int) -> None:
         click.echo(f"No assessments found for project '{project_name}'.")
         return
 
-    click.echo(f"\n{project_name}  last {len(records)} assessment{'s' if len(records) != 1 else ''}")
+    click.echo(
+        f"\n{project_name}  last {len(records)} assessment{'s' if len(records) != 1 else ''}"
+    )
     click.echo("━" * 55)
 
     prev_score: float | None = None
@@ -539,8 +572,10 @@ def compare(id1: int, id2: int) -> None:
     click.echo(f"\nCompare #{id1} vs #{id2}")
     click.echo(_SEP)
     click.echo(f"  {'':20}  #{id1:>4}   #{id2:>4}   delta")
-    click.echo(f"  {'Overall':<20}  {int(rec1.overall_score):>4}   {int(rec2.overall_score):>4}   "
-               f"{_fmt_delta(rec2.overall_score - rec1.overall_score)}")
+    click.echo(
+        f"  {'Overall':<20}  {int(rec1.overall_score):>4}   {int(rec2.overall_score):>4}   "
+        f"{_fmt_delta(rec2.overall_score - rec1.overall_score)}"
+    )
     for label, field in _PILLAR_FIELDS:
         s1 = getattr(rec1, field)
         s2 = getattr(rec2, field)
@@ -563,12 +598,19 @@ def compare(id1: int, id2: int) -> None:
 
 @cli.command()
 @click.option(
-    "--format", "fmt", default="compact", type=click.Choice(["compact", "full", "json"]),
-    show_default=True, help="Output format.",
+    "--format",
+    "fmt",
+    default="compact",
+    type=click.Choice(["compact", "full", "json"]),
+    show_default=True,
+    help="Output format.",
 )
 @click.option("--coverage", is_flag=True, default=False, help="Show files analyzed and skipped.")
 @click.option(
-    "--id", "assessment_id", default=None, type=int,
+    "--id",
+    "assessment_id",
+    default=None,
+    type=int,
     help="Report on a specific assessment id (default: most recent).",
 )
 def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
@@ -617,7 +659,9 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
     click.echo(f"\nAWAF Assessment: {rec.project_name or project_name}")
     click.echo(f"AWAF v1.0  |  {rec.created_at.strftime('%Y-%m-%d')}")
     click.echo(_SEP)
-    click.echo(f"  Overall Score    {int(rec.overall_score)}  {_readiness_label(rec.overall_score)}")
+    click.echo(
+        f"  Overall Score    {int(rec.overall_score)}  {_readiness_label(rec.overall_score)}"
+    )
     click.echo()
 
     # TIER 0
@@ -712,7 +756,9 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
 
     if coverage:
         click.echo()
-        click.echo(f"  Tokens used:  {rec.total_input_tokens:,} in / {rec.total_output_tokens:,} out")
+        click.echo(
+            f"  Tokens used:  {rec.total_input_tokens:,} in / {rec.total_output_tokens:,} out"
+        )
         click.echo(f"  Est. cost:    ${rec.estimated_cost_usd:.4f} USD")
 
 
