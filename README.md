@@ -38,10 +38,43 @@ Default provider: `anthropic` with `claude-opus-4-5`. Scores are calibrated on C
 
 ---
 
+## API Keys from .env
+
+awaf automatically loads a `.env` file in the current directory at startup. Keys already set in the environment take precedence.
+
+Create a `.env` file next to your project:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+# OPENAI_API_KEY=sk-...
+# GOOGLE_API_KEY=...
+```
+
+Then run normally — no export needed:
+
+```bash
+awaf run
+awaf run --pillar foundation
+```
+
+If you prefer to load `.env` manually before running:
+
+```bash
+# bash / zsh
+export $(grep -v '^#' .env | xargs) && awaf run
+```
+
+```powershell
+# PowerShell
+Get-Content .env | ForEach-Object { $k,$v = $_ -split '=',2; [System.Environment]::SetEnvironmentVariable($k,$v) }; awaf run
+```
+
+---
+
 ## Quickstart
 
 ```bash
-# Default: Anthropic
+# Default: Anthropic (.env or export)
 export ANTHROPIC_API_KEY=sk-ant-...
 awaf run
 
@@ -197,9 +230,11 @@ awaf:
 awaf run                                         # assess current directory
 awaf run --paths agents/ tools/                  # specific paths
 awaf run --ci                                    # CI mode with git context
-awaf run --pillar controllability                # single pillar only
+awaf run --pillar foundation                     # single pillar only
 awaf run --provider openai --model gpt-4o        # override provider
 awaf run --provider litellm --model ollama/llama3 # local model via LiteLLM
+awaf run --sequential                            # one pillar at a time (avoids rate limits)
+awaf run --sequential --delay 10                 # sequential with 10s pause between pillars
 awaf history                                     # score history for current project
 awaf compare <id1> <id2>                         # diff two assessments
 awaf report --format json                        # JSON output for CI artifact upload
@@ -208,6 +243,23 @@ awaf providers                                   # list configured providers and
 ```
 
 No color codes when stdout is not a TTY. No spinners in CI mode.
+
+### Running pillars one at a time
+
+Useful on free-tier API plans or when debugging a specific pillar. Each run saves to `awaf.db` and contributes to score history.
+
+```bash
+awaf run --pillar foundation
+awaf run --pillar security
+awaf run --pillar controllability
+# ... pick the pillars you care about
+```
+
+To score all 10 pillars sequentially with a pause between each call:
+
+```bash
+awaf run --sequential --delay 15
+```
 
 ---
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -77,13 +78,15 @@ def run_assessment(
     session_budget_usd: float | None = None,
     estimate_cost_fn: Callable[[str, int, int], float] | None = None,
     model: str = "",
+    pillar_delay_seconds: float = 0.0,
 ) -> AssessmentResult:
     """
-    Run all (or one) pillar agents concurrently against *artifact_content*.
+    Run all (or one) pillar agents against *artifact_content*.
 
     - pillar_filter: if set, run only the pillar whose name matches (case-insensitive)
     - session_budget_usd: approximate guardrail; remaining pillars skipped when exceeded
     - estimate_cost_fn: callable(model, input_tokens, output_tokens) -> float
+    - pillar_delay_seconds: seconds to sleep between pillars (sequential mode only)
     """
     agents = ALL_AGENTS
     if pillar_filter:
@@ -97,18 +100,18 @@ def run_assessment(
     cumulative_cost = 0.0
     budget_exceeded = False
 
-    # Run concurrently — each pillar is an independent LLM call with no shared state.
-    # max_workers is capped below len(agents) so that some futures stay queued.
-    # When a session budget is exceeded, queued (not-yet-started) futures can be
-    # cancelled before they consume tokens — enforcing the spec's hard-stop rule.
-    # Default concurrency: 5 (configurable via AWAF_CONCURRENCY env var).
     _concurrency = min(len(agents), int(os.environ.get("AWAF_CONCURRENCY", "5")))
-    with ThreadPoolExecutor(max_workers=_concurrency) as pool:
-        futures = {pool.submit(a.evaluate, provider, artifact_content): a for a in agents}
-        for future in as_completed(futures):
-            agent = futures[future]
+    _sequential = _concurrency == 1 or pillar_delay_seconds > 0
+
+    if _sequential:
+        # Sequential path: one pillar at a time with optional delay between calls.
+        # Useful for avoiding rate limits on low-tier API plans.
+        for i, agent in enumerate(agents):
+            if i > 0 and pillar_delay_seconds > 0:
+                logger.debug("Waiting %.0fs before next pillar (rate-limit delay).", pillar_delay_seconds)
+                time.sleep(pillar_delay_seconds)
             try:
-                result = future.result()
+                result = agent.evaluate(provider, artifact_content)
             except Exception as exc:
                 logger.warning("Pillar '%s' failed: %s", agent.name, exc)
                 result = PillarResult(
@@ -120,7 +123,6 @@ def run_assessment(
                 )
             results.append(result)
 
-            # Track budget
             if estimate_cost_fn and session_budget_usd is not None:
                 cost = estimate_cost_fn(model, result.input_tokens, result.output_tokens)
                 cumulative_cost += cost
@@ -131,20 +133,64 @@ def run_assessment(
                         session_budget_usd,
                         agent.name,
                     )
-                    # Cancel pending futures — mark those agents as skipped
-                    for f, a in futures.items():
-                        if not f.done():
-                            f.cancel()
-                            results.append(
-                                PillarResult(
-                                    name=a.name,
-                                    score=0.0,
-                                    confidence="budget_exceeded",
-                                    skipped=True,
-                                    skip_reason="session budget exceeded",
-                                )
+                    for remaining in agents[i + 1 :]:
+                        results.append(
+                            PillarResult(
+                                name=remaining.name,
+                                score=0.0,
+                                confidence="budget_exceeded",
+                                skipped=True,
+                                skip_reason="session budget exceeded",
                             )
+                        )
                     break
+    else:
+        # Concurrent path — each pillar is an independent LLM call with no shared state.
+        # max_workers is capped below len(agents) so that some futures stay queued.
+        # When a session budget is exceeded, queued futures can be cancelled before
+        # they consume tokens — enforcing the spec's hard-stop rule.
+        with ThreadPoolExecutor(max_workers=_concurrency) as pool:
+            futures = {pool.submit(a.evaluate, provider, artifact_content): a for a in agents}
+            for future in as_completed(futures):
+                agent = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    logger.warning("Pillar '%s' failed: %s", agent.name, exc)
+                    result = PillarResult(
+                        name=agent.name,
+                        score=0.0,
+                        confidence="self_reported",
+                        skipped=True,
+                        skip_reason=str(exc),
+                    )
+                results.append(result)
+
+                # Track budget
+                if estimate_cost_fn and session_budget_usd is not None:
+                    cost = estimate_cost_fn(model, result.input_tokens, result.output_tokens)
+                    cumulative_cost += cost
+                    if cumulative_cost >= session_budget_usd:
+                        budget_exceeded = True
+                        logger.warning(
+                            "Session budget $%.4f reached after '%s'. Skipping remaining pillars.",
+                            session_budget_usd,
+                            agent.name,
+                        )
+                        # Cancel pending futures — mark those agents as skipped
+                        for f, a in futures.items():
+                            if not f.done():
+                                f.cancel()
+                                results.append(
+                                    PillarResult(
+                                        name=a.name,
+                                        score=0.0,
+                                        confidence="budget_exceeded",
+                                        skipped=True,
+                                        skip_reason="session budget exceeded",
+                                    )
+                                )
+                        break
 
     # Re-order results to match ALL_AGENTS order for consistent display
     order = {a.name: i for i, a in enumerate(ALL_AGENTS)}

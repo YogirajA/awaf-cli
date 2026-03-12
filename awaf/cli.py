@@ -102,9 +102,27 @@ def _provider_status(
 # ---------------------------------------------------------------------------
 
 
+def _load_dotenv(path: str = ".env") -> None:
+    """Load KEY=value pairs from .env into os.environ (does not overwrite existing vars)."""
+    if not os.path.exists(path):
+        return
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+
+
 @click.group()
 def cli() -> None:
     """awaf — Score AI agent architectures against the AWAF open specification."""
+    _load_dotenv()
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +160,19 @@ def cli() -> None:
     metavar="NAME",
     help="Azure OpenAI deployment name.",
 )
+@click.option(
+    "--sequential",
+    is_flag=True,
+    default=False,
+    help="Run pillars one at a time (avoids rate limits; slower).",
+)
+@click.option(
+    "--delay",
+    default=0,
+    metavar="SECONDS",
+    type=int,
+    help="Seconds to wait between pillars when running sequentially (implies --sequential).",
+)
 def run(
     paths: tuple[str, ...],
     ci: bool,
@@ -150,6 +181,8 @@ def run(
     model: str | None,
     azure_endpoint: str | None,
     azure_deployment: str | None,
+    sequential: bool,
+    delay: int,
 ) -> None:
     """Assess agent architecture against AWAF v1.0 across 10 pillars."""
     import json as _json
@@ -173,6 +206,10 @@ def run(
         os.environ["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
     if azure_deployment:
         os.environ["AZURE_OPENAI_DEPLOYMENT"] = azure_deployment
+
+    # Sequential mode: limit concurrency to 1
+    if sequential or delay > 0:
+        os.environ["AWAF_CONCURRENCY"] = "1"
 
     # Resolve and validate provider
     try:
@@ -246,6 +283,7 @@ def run(
             session_budget_usd=budget_usd,
             estimate_cost_fn=estimate_cost,
             model=effective_model,
+            pillar_delay_seconds=float(delay),
         )
     except ValueError as exc:
         click.echo(f"Assessment error: {exc}", err=True)
