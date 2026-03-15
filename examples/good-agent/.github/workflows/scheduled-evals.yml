@@ -1,0 +1,45 @@
+name: Scheduled Evals
+
+on:
+  schedule:
+    # Run every Monday at 08:00 UTC to catch model regressions
+    - cron: "0 8 * * 1"
+  # Also run on PRs that touch agent code or evals
+  pull_request:
+    paths:
+      - "agent.py"
+      - "evals/**"
+
+jobs:
+  unit-evals:
+    name: Model selection evals (no API key required)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest anthropic
+      - run: pytest evals/test_select_model.py -v
+
+  hallucination-evals:
+    name: Hallucination rate evals (requires API key)
+    runs-on: ubuntu-latest
+    # Only run on schedule, not on every PR (costs tokens)
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install anthropic
+      - name: Run hallucination evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python evals/run_evals.py
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: evals/results/

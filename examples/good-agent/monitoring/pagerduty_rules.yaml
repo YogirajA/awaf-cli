@@ -1,0 +1,43 @@
+# PagerDuty routing rules for the File Summarizer Agent
+# Integrates with CloudWatch SNS topics defined in cloudwatch_alarms.json
+
+service: summarizer-agent
+integration_key: "${PAGERDUTY_INTEGRATION_KEY}"
+
+escalation_policies:
+  critical:
+    name: summarizer-agent-critical
+    description: "Budget exhausted or complete outage — page on-call immediately"
+    levels:
+      - targets: ["on-call-engineer"]
+        escalate_after_minutes: 5
+      - targets: ["engineering-lead"]
+        escalate_after_minutes: 15
+
+  warning:
+    name: summarizer-agent-warning
+    description: "SLO degradation — notify during business hours"
+    levels:
+      - targets: ["on-call-engineer"]
+        escalate_after_minutes: 30
+
+routing_rules:
+  - condition: "alarm_name matches 'budget-exhausted'"
+    policy: critical
+    severity: critical
+    description: "Session token hard stop triggered — agent halted mid-batch"
+
+  - condition: "alarm_name matches 'high-error-rate'"
+    policy: critical
+    severity: error
+    description: "Error rate >1% — check Anthropic API status and agent logs"
+
+  - condition: "alarm_name matches 'p95-latency-breach'"
+    policy: warning
+    severity: warning
+    description: "p95 latency >8s — review model selection and API response times"
+
+  - condition: "alarm_name matches 'budget-80pct'"
+    policy: warning
+    severity: warning
+    description: "Approaching token budget — consider splitting batch or raising limit"

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "gd-001",
+    "input": "The quick brown fox jumps over the lazy dog.",
+    "expected_keywords": ["fox", "dog"],
+    "must_not_contain": ["cat", "horse", "bird"],
+    "notes": "Simple one-sentence document; summary must preserve subject and action."
+  },
+  {
+    "id": "gd-002",
+    "input": "Meeting notes 2026-03-01: Attendees agreed to ship v2.0 by end of quarter. Action items: Alice to finalize API docs, Bob to run load tests.",
+    "expected_keywords": ["v2.0", "Alice", "Bob", "API", "load tests"],
+    "must_not_contain": ["v1.0", "cancelled"],
+    "notes": "Action item extraction accuracy test."
+  },
+  {
+    "id": "gd-003",
+    "input": "WARNING: This document is intentionally left blank for testing purposes.",
+    "expected_keywords": ["blank", "testing"],
+    "must_not_contain": [],
+    "notes": "Edge case: minimal content should not hallucinate additional facts."
+  }
+]

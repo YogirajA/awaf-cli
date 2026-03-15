@@ -1,0 +1,68 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "CloudWatch alarms for the File Summarizer Agent SLOs",
+  "Resources": {
+    "HighErrorRateAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "summarizer-agent-high-error-rate",
+        "AlarmDescription": "Fires when error rate exceeds 1% over 5 minutes (SLO: >99% success rate)",
+        "MetricName": "ErrorCount",
+        "Namespace": "SummarizerAgent",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "Threshold": 0.01,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "AlarmActions": ["arn:aws:sns:us-east-1:123456789012:summarizer-agent-alerts"],
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "HighLatencyAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "summarizer-agent-p95-latency-breach",
+        "AlarmDescription": "Fires when p95 latency exceeds 8000ms (SLO: p95 < 8s)",
+        "MetricName": "LatencyMs",
+        "Namespace": "SummarizerAgent",
+        "ExtendedStatistic": "p95",
+        "Period": 300,
+        "EvaluationPeriods": 2,
+        "Threshold": 8000,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "AlarmActions": ["arn:aws:sns:us-east-1:123456789012:summarizer-agent-alerts"]
+      }
+    },
+    "BudgetApproachingAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "summarizer-agent-budget-80pct",
+        "AlarmDescription": "Fires when session token usage reaches 80% of SESSION_TOKEN_LIMIT",
+        "MetricName": "SessionTokensUsed",
+        "Namespace": "SummarizerAgent",
+        "Statistic": "Maximum",
+        "Period": 60,
+        "EvaluationPeriods": 1,
+        "Threshold": 8000,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "AlarmActions": ["arn:aws:sns:us-east-1:123456789012:summarizer-agent-alerts"]
+      }
+    },
+    "BudgetExhaustedAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "summarizer-agent-budget-exhausted",
+        "AlarmDescription": "Fires when session token hard stop is triggered",
+        "MetricName": "BudgetExhaustedCount",
+        "Namespace": "SummarizerAgent",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "AlarmActions": ["arn:aws:sns:us-east-1:123456789012:summarizer-agent-critical"],
+        "TreatMissingData": "notBreaching"
+      }
+    }
+  }
+}
