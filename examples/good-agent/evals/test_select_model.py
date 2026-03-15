@@ -5,8 +5,8 @@ These tests verify that select_model() assigns the right model tier for
 different input sizes. They run in CI on every PR (no API key required).
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
