@@ -29,7 +29,8 @@ def run_evals() -> dict:
         sys.exit(1)
 
     client = anthropic.Anthropic(api_key=api_key)
-    cases = json.loads(open(GOLDEN_PATH).read())
+    with open(GOLDEN_PATH) as _f:
+        cases = json.load(_f)
 
     passed = failed = hallucinated = 0
 
@@ -64,8 +65,13 @@ def run_evals() -> dict:
 
     print(f"\nResults: {passed}/{total} passed | hallucination rate: {hallucination_rate:.1%}")
 
-    return {"passed": passed, "failed": failed, "hallucinated": hallucinated,
-            "total": total, "hallucination_rate": hallucination_rate}
+    return {
+        "passed": passed,
+        "failed": failed,
+        "hallucinated": hallucinated,
+        "total": total,
+        "hallucination_rate": hallucination_rate,
+    }
 
 
 if __name__ == "__main__":

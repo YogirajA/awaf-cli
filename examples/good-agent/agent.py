@@ -13,18 +13,18 @@ import signal
 import sys
 import time
 import uuid
+from enum import Enum
 
 import anthropic
-from enum import Enum
 
 
 # ---------------------------------------------------------------------------
 # Trust tiers — enforced in code at every data boundary (not via prompts)
 # ---------------------------------------------------------------------------
 class TrustTier(Enum):
-    UNTRUSTED = "untrusted"   # raw CLI args or file content — never use directly
-    VALIDATED = "validated"   # passed sanitize_input() + validate_path()
-    SYSTEM = "system"         # hardcoded constants owned by this agent
+    UNTRUSTED = "untrusted"  # raw CLI args or file content — never use directly
+    VALIDATED = "validated"  # passed sanitize_input() + validate_path()
+    SYSTEM = "system"  # hardcoded constants owned by this agent
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +141,8 @@ def summarize(file_path: str, client: anthropic.Anthropic) -> str:
         raise ValueError(f"File '{file_path}' exceeds {MAX_FILE_BYTES} bytes limit.")
 
     file_mtime = os.path.getmtime(safe_path)
-    raw = open(safe_path).read()
+    with open(safe_path) as _f:
+        raw = _f.read()
     content = sanitize_input(raw, tier=TrustTier.UNTRUSTED)
     content_hash = hashlib.sha256(content.encode()).hexdigest()
 
@@ -153,9 +154,7 @@ def summarize(file_path: str, client: anthropic.Anthropic) -> str:
 
     # Cost: enforce session budget before calling
     if _session_tokens_used >= SESSION_TOKEN_LIMIT:
-        raise RuntimeError(
-            f"Session budget exhausted ({SESSION_TOKEN_LIMIT} tokens). Aborting."
-        )
+        raise RuntimeError(f"Session budget exhausted ({SESSION_TOKEN_LIMIT} tokens). Aborting.")
 
     # Cost: loop detection — prevent repeated LLM calls on the same content
     _call_count[content_hash] = _call_count.get(content_hash, 0) + 1
@@ -189,7 +188,7 @@ def summarize(file_path: str, client: anthropic.Anthropic) -> str:
             break
         except Exception as exc:
             last_error = exc
-            wait = 2 ** attempt
+            wait = 2**attempt
             logging.warning(f"Attempt {attempt + 1} failed: {exc} — retrying in {wait}s")
             time.sleep(wait)
     else:
@@ -284,10 +283,16 @@ def _check_cross_file_contradictions(summaries: dict[str, str]) -> None:
         if len(paths) < 2:
             continue
         contexts = [summaries[p].lower() for p in paths]
-        affirmative = sum(1 for c in contexts if entity.lower() in c and not any(n + entity.lower() in c for n in negations))
+        affirmative = sum(
+            1
+            for c in contexts
+            if entity.lower() in c and not any(n + entity.lower() in c for n in negations)
+        )
         negative = len(paths) - affirmative
         if affirmative > 0 and negative > 0:
-            logging.warning(f"CONTEXT_CONFLICT: entity '{entity}' described both positively and negatively across files {paths}")
+            logging.warning(
+                f"CONTEXT_CONFLICT: entity '{entity}' described both positively and negatively across files {paths}"
+            )
 
 
 if __name__ == "__main__":

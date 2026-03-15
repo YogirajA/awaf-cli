@@ -28,8 +28,7 @@ _BANNER = (
     r"   _      _  _  _    _      ___  " + "\n"
     r"  /_\    | || || |  /_\    | __| " + "\n"
     r" / _ \   | \/ \/ | / _ \   | _|  " + "\n"
-    r"/_/ \_\   \_/\_/  /_/ \_\  |_    "
-    + "    Agent Well-Architected Framework\n"
+    r"/_/ \_\   \_/\_/  /_/ \_\  |_    " + "    Agent Well-Architected Framework\n"
 )
 
 # (provider_name, default_model, api_key_env_var)
@@ -351,7 +350,9 @@ def run(
     click.echo("  Scale: Production Ready >=90 · Near Ready >=75 · Needs Work >=50")
     click.echo("         High Risk >=25 · Not Ready <25")
     click.echo("  Foundation <40 = automatic FAIL regardless of overall score.")
-    click.echo("  Tier 2 pillars (Reasoning, Controllability, Context Integrity) carry 1.5x weight.")
+    click.echo(
+        "  Tier 2 pillars (Reasoning, Controllability, Context Integrity) carry 1.5x weight."
+    )
     click.echo()
 
     _print_run_pillars(assessment)
@@ -540,10 +541,22 @@ def _pillar_table_lines(assessment: object) -> list[str]:
     def seg(w: int, ch: str = "─") -> str:
         return ch * (w + 2)
 
-    top     = "┌" + seg(CP) + "┬" + seg(CS) + "┬" + seg(CB) + "┬" + seg(CC) + "┬" + seg(CT) + "┐"
-    mid     = "├" + seg(CP) + "┼" + seg(CS) + "┼" + seg(CB) + "┼" + seg(CC) + "┼" + seg(CT) + "┤"
-    tsep    = "╞" + seg(CP,"═") + "╪" + seg(CS,"═") + "╪" + seg(CB,"═") + "╪" + seg(CC,"═") + "╪" + seg(CT,"═") + "╡"
-    bot     = "└" + seg(CP) + "┴" + seg(CS) + "┴" + seg(CB) + "┴" + seg(CC) + "┴" + seg(CT) + "┘"
+    top = "┌" + seg(CP) + "┬" + seg(CS) + "┬" + seg(CB) + "┬" + seg(CC) + "┬" + seg(CT) + "┐"
+    mid = "├" + seg(CP) + "┼" + seg(CS) + "┼" + seg(CB) + "┼" + seg(CC) + "┼" + seg(CT) + "┤"
+    tsep = (
+        "╞"
+        + seg(CP, "═")
+        + "╪"
+        + seg(CS, "═")
+        + "╪"
+        + seg(CB, "═")
+        + "╪"
+        + seg(CC, "═")
+        + "╪"
+        + seg(CT, "═")
+        + "╡"
+    )
+    bot = "└" + seg(CP) + "┴" + seg(CS) + "┴" + seg(CB) + "┴" + seg(CC) + "┴" + seg(CT) + "┘"
 
     # Full-width span for tier headers — inner width = sum of all cols+padding+separators between
     inner = (CP + 2) + 1 + (CS + 2) + 1 + (CB + 2) + 1 + (CC + 2) + 1 + (CT + 2)  # = 68
@@ -555,9 +568,7 @@ def _pillar_table_lines(assessment: object) -> list[str]:
         s = f"{int(score):>{CS}}" if score is not None else f"{'—':>{CS}}"
         b = _score_bar(score) if score is not None else " " * CB
         c = _short_confidence(conf) if conf else ""
-        return (
-            f"│ {name:<{CP}} │ {s} │ {b} │ {c:<{CC}} │ {status:>{CT}} │"
-        )
+        return f"│ {name:<{CP}} │ {s} │ {b} │ {c:<{CC}} │ {status:>{CT}} │"
 
     hdr = (
         f"│ {'Pillar':<{CP}} │ {'Score':>{CS}} │ {'Progress':<{CB}} │"
@@ -576,7 +587,14 @@ def _pillar_table_lines(assessment: object) -> list[str]:
             rows.append(drow(r.name, r.score, r.confidence, st))
 
     # Tier 1
-    tier1 = {"Op. Excellence", "Security", "Reliability", "Performance", "Cost Optim.", "Sustainability"}
+    tier1 = {
+        "Op. Excellence",
+        "Security",
+        "Reliability",
+        "Performance",
+        "Cost Optim.",
+        "Sustainability",
+    }
     rows.append(tsep)
     rows.append(hrow("TIER 1 — CLOUD WAF ADAPTED"))
     rows.append(mid)
@@ -988,13 +1006,15 @@ def _write_artifact(
     def _asc(text: str) -> str:
         """Replace common non-ASCII punctuation so the file stays 7-bit clean."""
         return (
-            text.replace("\u2014", "--")   # em dash
-            .replace("\u2013", "-")        # en dash
-            .replace("\u2192", "->")       # →
-            .replace("\u2190", "<-")       # ←
-            .replace("\u2026", "...")      # ellipsis
-            .replace("\u201c", '"').replace("\u201d", '"')   # curly double quotes
-            .replace("\u2018", "'").replace("\u2019", "'")   # curly single quotes
+            text.replace("\u2014", "--")  # em dash
+            .replace("\u2013", "-")  # en dash
+            .replace("\u2192", "->")  # →
+            .replace("\u2190", "<-")  # ←
+            .replace("\u2026", "...")  # ellipsis
+            .replace("\u201c", '"')
+            .replace("\u201d", '"')  # curly double quotes
+            .replace("\u2018", "'")
+            .replace("\u2019", "'")  # curly single quotes
         )
 
     def _awrap(text: str, width: int = 78, indent: str = "  ") -> list[str]:
@@ -1031,12 +1051,31 @@ def _write_artifact(
     a(SEP_MINOR)
 
     # Pillar table — plain ASCII for file portability
-    tier1_names = {"Op. Excellence", "Security", "Reliability", "Performance", "Cost Optim.", "Sustainability"}
+    tier1_names = {
+        "Op. Excellence",
+        "Security",
+        "Reliability",
+        "Performance",
+        "Cost Optim.",
+        "Sustainability",
+    }
     tier2_names = {"Reasoning Integ.", "Controllability", "Context Integrity"}
     CP, CS, CB, CC, CT = 20, 8, 12, 12, 7
 
     def _atbl_sep(ch: str = "-", jn: str = "+") -> str:
-        return jn + (ch * (CP + 2)) + jn + (ch * (CS + 2)) + jn + (ch * (CB + 2)) + jn + (ch * (CC + 2)) + jn + (ch * (CT + 2)) + jn
+        return (
+            jn
+            + (ch * (CP + 2))
+            + jn
+            + (ch * (CS + 2))
+            + jn
+            + (ch * (CB + 2))
+            + jn
+            + (ch * (CC + 2))
+            + jn
+            + (ch * (CT + 2))
+            + jn
+        )
 
     def _atbl_row(name: str, score: float | None, conf: str | None, status: str = "") -> str:
         s = f"{int(score)}/100" if score is not None else "--"
