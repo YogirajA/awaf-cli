@@ -20,8 +20,17 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-_SEP = "━" * 40
+_SEP = "━" * 70
 _IS_TTY = sys.stdout.isatty()
+
+# figlet "small" font — AWAF
+_BANNER = (
+    r"   _      _  _  _    _      ___  " + "\n"
+    r"  /_\    | || || |  /_\    | __| " + "\n"
+    r" / _ \   | \/ \/ | / _ \   | _|  " + "\n"
+    r"/_/ \_\   \_/\_/  /_/ \_\  |_    "
+    + "    Agent Well-Architected Framework\n"
+)
 
 # (provider_name, default_model, api_key_env_var)
 _PROVIDER_TABLE: list[tuple[str, str, str]] = [
@@ -40,12 +49,35 @@ _READINESS: list[tuple[int, str]] = [
     (0, "Not Ready"),
 ]
 
+_READINESS_DESCRIPTIONS: dict[str, str] = {
+    "Production Ready": "Agent is production-grade. Minor improvements only.",
+    "Near Ready": "Close to production. Address findings before deploying.",
+    "Needs Work": "Notable gaps. Resolve High findings before production use.",
+    "High Risk": "Significant control failures. Not suitable for production.",
+    "Not Ready": "Critical gaps across multiple pillars. Major rework required.",
+}
+
 
 def _readiness_label(score: float) -> str:
     for threshold, label in _READINESS:
         if score >= threshold:
             return label
     return "Not Ready"
+
+
+def _readiness_description(score: float) -> str:
+    return _READINESS_DESCRIPTIONS.get(_readiness_label(score), "")
+
+
+def _score_bar(score: float) -> str:
+    filled = round(score / 10)
+    return "[" + "#" * filled + " " * (10 - filled) + "]"
+
+
+def _short_confidence(conf: str) -> str:
+    return {"self_reported": "self-rep.", "verified": "verified", "partial": "partial"}.get(
+        conf, conf
+    )
 
 
 def _read_toml(path: str = "awaf.toml") -> dict:  # type: ignore[type-arg]
@@ -173,6 +205,18 @@ def cli() -> None:
     type=int,
     help="Seconds to wait between pillars when running sequentially (implies --sequential).",
 )
+@click.option(
+    "--out",
+    default="awaf-report.txt",
+    metavar="PATH",
+    help="Artifact text file path (default: awaf-report.txt). Empty string to disable.",
+)
+@click.option(
+    "--no-artifact",
+    is_flag=True,
+    default=False,
+    help="Disable artifact file output.",
+)
 def run(
     paths: tuple[str, ...],
     ci: bool,
@@ -183,6 +227,8 @@ def run(
     azure_deployment: str | None,
     sequential: bool,
     delay: int,
+    out: str,
+    no_artifact: bool,
 ) -> None:
     """Assess agent architecture against AWAF v1.0 across 10 pillars."""
     import json as _json
@@ -293,19 +339,23 @@ def run(
         sys.exit(2)
 
     # Display
-    click.echo(f"\nAWAF Assessment: {project_name}")
-    click.echo(f"AWAF v1.0  |  {_today()}")
+    _label = _readiness_label(assessment.overall_score)
+    _desc = _readiness_description(assessment.overall_score)
+    click.echo(_BANNER)
+    click.echo(f"AWAF Assessment: {project_name}")
+    click.echo(f"AWAF v1.0  |  {_today()}  |  {config.provider_name} / {effective_model}")
     click.echo(_SEP)
-    click.echo(
-        f"  Overall Score    {int(assessment.overall_score)}  "
-        f"{_readiness_label(assessment.overall_score)}"
-    )
-    click.echo(f"  Provider         {config.provider_name} / {effective_model}")
+    click.echo(f"  Overall Score    {int(assessment.overall_score)}/100   {_label}")
+    click.echo(f"  {_desc}")
+    click.echo()
+    click.echo("  Scale: Production Ready >=90 · Near Ready >=75 · Needs Work >=50")
+    click.echo("         High Risk >=25 · Not Ready <25")
+    click.echo("  Foundation <40 = automatic FAIL regardless of overall score.")
+    click.echo("  Tier 2 pillars (Reasoning, Controllability, Context Integrity) carry 1.5x weight.")
     click.echo()
 
     _print_run_pillars(assessment)
 
-    click.echo()
     click.echo(f"  FILES ANALYZED     {len(ingest_result.files_scanned)} files")
     if ingest_result.files_skipped:
         click.echo(f"  FILES NOT SCANNED  {len(ingest_result.files_skipped)} files")
@@ -335,25 +385,48 @@ def run(
     all_findings.sort(key=lambda f: _sev.get(f.get("severity", ""), 3))
 
     if all_findings:
+        import textwrap
+
         click.echo()
         click.echo("  FINDINGS  (ordered by severity)")
         for f in all_findings:
-            click.echo(f"  {f.get('pillar', ''):<18}  [{f.get('severity', '')}]")
-            click.echo(f"               {f.get('detail', '')}")
+            sev = f.get("severity", "")
+            pillar = f.get("pillar", "")
+            detail = f.get("detail", "")
+            prefix = f"  [{sev:<8}]  {pillar:<18}  "
+            wrapped = textwrap.wrap(detail, width=65)
+            click.echo(prefix + (wrapped[0] if wrapped else ""))
+            indent = " " * len(prefix)
+            for chunk in wrapped[1:]:
+                click.echo(indent + chunk)
         click.echo(_SEP)
 
     if all_recs:
+        import textwrap as _tw2
+
         click.echo()
         click.echo("  RECOMMENDATIONS")
         for rec in all_recs:
-            click.echo(f"  {rec.get('pillar', ''):<18}  {rec.get('detail', '')}")
+            pillar = rec.get("pillar", "")
+            detail = rec.get("detail", "")
+            prefix = f"  {pillar:<18}  "
+            wrapped = _tw2.wrap(detail, width=65)
+            click.echo(prefix + (wrapped[0] if wrapped else ""))
+            indent = " " * len(prefix)
+            for chunk in wrapped[1:]:
+                click.echo(indent + chunk)
         click.echo(_SEP)
 
     if all_improvements:
+        import textwrap as _tw3
+
         click.echo()
         click.echo("  TO IMPROVE THIS ASSESSMENT")
         for item in all_improvements[:3]:
-            click.echo(f"  {item}")
+            wrapped = _tw3.wrap(item, width=68)
+            click.echo("  " + (wrapped[0] if wrapped else ""))
+            for chunk in wrapped[1:]:
+                click.echo("  " + chunk)
         click.echo(_SEP)
 
     # Persist
@@ -404,6 +477,23 @@ def run(
         estimated_cost_usd=assessment.estimated_cost_usd,
     )
 
+    # Write artifact text file
+    if not no_artifact and out:
+        _write_artifact(
+            path=out,
+            project_name=project_name,
+            date=_today(),
+            assessment=assessment,
+            ingest_result=ingest_result,
+            all_findings=all_findings,
+            all_recs=all_recs,
+            all_gaps=all_gaps,
+            all_improvements=all_improvements,
+            provider_name=config.provider_name,
+            effective_model=effective_model,
+        )
+        click.echo(f"  Artifact: {out}")
+
     # Threshold checks → exit code
     tier2_scores = [
         r.score
@@ -438,37 +528,79 @@ def run(
         sys.exit(1)
 
 
-def _print_run_pillars(assessment: object) -> None:
-    """Render the pillar score table for awaf run output."""
+def _pillar_table_lines(assessment: object) -> list[str]:
+    """Build a bordered table of pillar scores. Returns lines without trailing newlines."""
     from awaf.pillars import AssessmentResult
 
     assert isinstance(assessment, AssessmentResult)
 
-    click.echo("  TIER 0: FOUNDATION")
+    # Column content widths (excluding border/padding)
+    CP, CS, CB, CC, CT = 20, 5, 12, 10, 7  # pillar, score, bar, conf, status
+
+    def seg(w: int, ch: str = "─") -> str:
+        return ch * (w + 2)
+
+    top     = "┌" + seg(CP) + "┬" + seg(CS) + "┬" + seg(CB) + "┬" + seg(CC) + "┬" + seg(CT) + "┐"
+    mid     = "├" + seg(CP) + "┼" + seg(CS) + "┼" + seg(CB) + "┼" + seg(CC) + "┼" + seg(CT) + "┤"
+    tsep    = "╞" + seg(CP,"═") + "╪" + seg(CS,"═") + "╪" + seg(CB,"═") + "╪" + seg(CC,"═") + "╪" + seg(CT,"═") + "╡"
+    bot     = "└" + seg(CP) + "┴" + seg(CS) + "┴" + seg(CB) + "┴" + seg(CC) + "┴" + seg(CT) + "┘"
+
+    # Full-width span for tier headers — inner width = sum of all cols+padding+separators between
+    inner = (CP + 2) + 1 + (CS + 2) + 1 + (CB + 2) + 1 + (CC + 2) + 1 + (CT + 2)  # = 68
+
+    def hrow(text: str) -> str:
+        return "│ " + f"{text:<{inner - 1}}" + "│"
+
+    def drow(name: str, score: float | None, conf: str | None, status: str = "") -> str:
+        s = f"{int(score):>{CS}}" if score is not None else f"{'—':>{CS}}"
+        b = _score_bar(score) if score is not None else " " * CB
+        c = _short_confidence(conf) if conf else ""
+        return (
+            f"│ {name:<{CP}} │ {s} │ {b} │ {c:<{CC}} │ {status:>{CT}} │"
+        )
+
+    hdr = (
+        f"│ {'Pillar':<{CP}} │ {'Score':>{CS}} │ {'Progress':<{CB}} │"
+        f" {'Confidence':<{CC}} │ {'Status':>{CT}} │"
+    )
+
+    rows: list[str] = [top, hdr]
+
+    # Tier 0
+    rows.append(tsep)
+    rows.append(hrow("TIER 0 — FOUNDATION"))
+    rows.append(mid)
     for r in assessment.pillar_results:
         if r.name == "Foundation":
-            _print_pillar_row(r, r.name, "score", "confidence", is_foundation=True)
+            st = "PASS" if (r.score is not None and r.score >= 40) else "FAIL"
+            rows.append(drow(r.name, r.score, r.confidence, st))
 
-    click.echo()
-    click.echo("  TIER 1: CLOUD WAF ADAPTED")
-    tier1 = [
-        "Op. Excellence",
-        "Security",
-        "Reliability",
-        "Performance",
-        "Cost Optim.",
-        "Sustainability",
-    ]
+    # Tier 1
+    tier1 = {"Op. Excellence", "Security", "Reliability", "Performance", "Cost Optim.", "Sustainability"}
+    rows.append(tsep)
+    rows.append(hrow("TIER 1 — CLOUD WAF ADAPTED"))
+    rows.append(mid)
     for r in assessment.pillar_results:
         if r.name in tier1:
-            _print_pillar_row(r, r.name, "score", "confidence")
+            rows.append(drow(r.name, r.score, r.confidence))
 
-    click.echo()
-    click.echo("  TIER 2: AGENT-NATIVE  (1.5x weight)")
-    tier2 = ["Reasoning Integ.", "Controllability", "Context Integrity"]
+    # Tier 2
+    rows.append(tsep)
+    rows.append(hrow("TIER 2 — AGENT-NATIVE  (1.5x weight)"))
+    rows.append(mid)
+    tier2 = {"Reasoning Integ.", "Controllability", "Context Integrity"}
     for r in assessment.pillar_results:
         if r.name in tier2:
-            _print_pillar_row(r, r.name, "score", "confidence")
+            rows.append(drow(r.name, r.score, r.confidence, "1.5x"))
+
+    rows.append(bot)
+    return rows
+
+
+def _print_run_pillars(assessment: object) -> None:
+    """Print the pillar score table for awaf run output."""
+    for line in _pillar_table_lines(assessment):
+        click.echo(line)
 
 
 def _any_agent_files_changed(patterns: list[str]) -> bool:
@@ -754,12 +886,18 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
         click.echo()
         click.echo("  FINDINGS  (ordered by severity)")
         if findings:
+            import textwrap as _tw
+
             for f in findings:
                 pillar = f.get("pillar", "")
                 severity = f.get("severity", "")
                 detail = f.get("detail", "")
-                click.echo(f"  {pillar:<18}  [{severity}]")
-                click.echo(f"               {detail}")
+                prefix = f"  [{severity:<8}]  {pillar:<18}  "
+                wrapped = _tw.wrap(detail, width=65)
+                click.echo(prefix + (wrapped[0] if wrapped else ""))
+                indent = " " * len(prefix)
+                for chunk in wrapped[1:]:
+                    click.echo(indent + chunk)
         else:
             click.echo("  — (no findings recorded)")
 
@@ -806,20 +944,203 @@ def _print_pillar_row(
     score_attr: str | None,
     conf_attr: str | None,
     is_foundation: bool = False,
+    is_tier2: bool = False,
 ) -> None:
-    """Render one pillar line: label  score  confidence  [PASS/FAIL for foundation]."""
+    """Render one pillar line: label  bar  score/100  confidence  [PASS/FAIL | 1.5x]."""
     score = getattr(rec, score_attr, None) if score_attr else None
     conf = getattr(rec, conf_attr, None) if conf_attr else None
 
     if score is None:
-        score_str = "  —"
+        score_str = "             —   "
         conf_str = ""
     else:
-        score_str = f"{int(score):>3}"
-        conf_str = f"  {conf}" if conf else ""
+        score_str = f"{_score_bar(score)} {int(score):>3}/100"
+        conf_str = f"  {_short_confidence(conf)}" if conf else ""
 
     line = f"  {label:<18}  {score_str}{conf_str}"
     if is_foundation and score is not None:
         pass_fail = "  PASS" if score >= 40 else "  FAIL"
         line += pass_fail
+    if is_tier2:
+        line += "  1.5x"
     click.echo(line)
+
+
+def _write_artifact(
+    path: str,
+    project_name: str,
+    date: str,
+    assessment: object,
+    ingest_result: object,
+    all_findings: list[dict],  # type: ignore[type-arg]
+    all_recs: list[dict],  # type: ignore[type-arg]
+    all_gaps: list[str],
+    all_improvements: list[str],
+    provider_name: str,
+    effective_model: str,
+) -> None:
+    """Write a plain-text artifact report to *path*."""
+    import datetime
+    import textwrap as _tw
+
+    from awaf.pillars import AssessmentResult
+
+    def _asc(text: str) -> str:
+        """Replace common non-ASCII punctuation so the file stays 7-bit clean."""
+        return (
+            text.replace("\u2014", "--")   # em dash
+            .replace("\u2013", "-")        # en dash
+            .replace("\u2192", "->")       # →
+            .replace("\u2190", "<-")       # ←
+            .replace("\u2026", "...")      # ellipsis
+            .replace("\u201c", '"').replace("\u201d", '"')   # curly double quotes
+            .replace("\u2018", "'").replace("\u2019", "'")   # curly single quotes
+        )
+
+    def _awrap(text: str, width: int = 78, indent: str = "  ") -> list[str]:
+        """Wrap *text* to *width*, returning lines all prefixed by *indent*."""
+        wrapped = _tw.wrap(text, width=width - len(indent))
+        return [(indent + line) for line in wrapped] if wrapped else [indent]
+
+    assert isinstance(assessment, AssessmentResult)
+
+    SEP_MAJOR = "=" * 40
+    SEP_MINOR = "-" * 40
+
+    lines: list[str] = []
+    a = lines.append
+
+    label = _readiness_label(assessment.overall_score)
+    desc = _readiness_description(assessment.overall_score)
+
+    # Strip the trailing newline from _BANNER before splitting
+    for banner_line in _BANNER.rstrip("\n").splitlines():
+        a(banner_line)
+    a("")
+    a(f"AWAF Assessment: {project_name}")
+    a(f"AWAF v1.0 | {date} | {provider_name} / {effective_model}")
+    a(SEP_MAJOR)
+    a("")
+    a(f"Overall Score: {int(assessment.overall_score)}/100 -- {label}")
+    a(_asc(desc))
+    a("")
+    a("Scale: Production Ready >=90 | Near Ready >=75 | Needs Work >=50")
+    a("       High Risk >=25 | Not Ready <25")
+    a("Foundation <40 = automatic FAIL. Tier 2 pillars carry 1.5x weight.")
+    a("")
+    a(SEP_MINOR)
+
+    # Pillar table — plain ASCII for file portability
+    tier1_names = {"Op. Excellence", "Security", "Reliability", "Performance", "Cost Optim.", "Sustainability"}
+    tier2_names = {"Reasoning Integ.", "Controllability", "Context Integrity"}
+    CP, CS, CB, CC, CT = 20, 8, 12, 12, 7
+
+    def _atbl_sep(ch: str = "-", jn: str = "+") -> str:
+        return jn + (ch * (CP + 2)) + jn + (ch * (CS + 2)) + jn + (ch * (CB + 2)) + jn + (ch * (CC + 2)) + jn + (ch * (CT + 2)) + jn
+
+    def _atbl_row(name: str, score: float | None, conf: str | None, status: str = "") -> str:
+        s = f"{int(score)}/100" if score is not None else "--"
+        b = _score_bar(score) if score is not None else " " * CB
+        c = conf or ""
+        return f"| {name:<{CP}} | {s:<{CS}} | {b:<{CB}} | {c:<{CC}} | {status:>{CT}} |"
+
+    _atbl_inner = (CP + 2) + 1 + (CS + 2) + 1 + (CB + 2) + 1 + (CC + 2) + 1 + (CT + 2)
+
+    def _atbl_hrow(text: str) -> str:
+        return "| " + f"{text:<{_atbl_inner - 1}}" + "|"
+
+    def _atbl_hdr() -> str:
+        return f"| {'Pillar':<{CP}} | {'Score':<{CS}} | {'Progress':<{CB}} | {'Confidence':<{CC}} | {'Status':>{CT}} |"
+
+    a(_atbl_sep("="))
+    a(_atbl_hdr())
+    a(_atbl_sep("="))
+    a(_atbl_hrow("TIER 0 -- FOUNDATION"))
+    a(_atbl_sep())
+    for r in assessment.pillar_results:
+        if r.name == "Foundation":
+            st = "PASS" if (r.score is not None and r.score >= 40) else "FAIL"
+            a(_atbl_row(r.name, r.score, r.confidence, st))
+    a(_atbl_sep("="))
+    a(_atbl_hrow("TIER 1 -- CLOUD WAF ADAPTED"))
+    a(_atbl_sep())
+    for r in assessment.pillar_results:
+        if r.name in tier1_names:
+            a(_atbl_row(r.name, r.score, r.confidence))
+    a(_atbl_sep("="))
+    a(_atbl_hrow("TIER 2 -- AGENT-NATIVE (1.5x weight)"))
+    a(_atbl_sep())
+    for r in assessment.pillar_results:
+        if r.name in tier2_names:
+            a(_atbl_row(r.name, r.score, r.confidence, "1.5x"))
+    a(_atbl_sep("="))
+    a("")
+    a(SEP_MINOR)
+
+    # Files
+    files_scanned = getattr(ingest_result, "files_scanned", [])
+    files_skipped = getattr(ingest_result, "files_skipped", [])
+    a(f"FILES ANALYZED: {len(files_scanned)} files")
+    if files_skipped:
+        a(f"FILES NOT SCANNED: {len(files_skipped)} files")
+        for s in files_skipped[:10]:
+            a(f"  {s}")
+    if assessment.budget_exceeded:
+        a("WARNING: session budget exceeded; some pillars were skipped")
+    a("")
+    a(SEP_MINOR)
+
+    # Findings
+    if all_findings:
+        a("FINDINGS (ordered by severity)")
+        for f in all_findings:
+            sev = f.get("severity", "")
+            pillar = f.get("pillar", "")
+            detail = _asc(f.get("detail", ""))
+            prefix = f"  [{sev:<8}]  {pillar:<18}  "
+            wrapped = _tw.wrap(detail, width=78 - len(prefix))
+            a(prefix + (wrapped[0] if wrapped else ""))
+            cont = " " * len(prefix)
+            for chunk in wrapped[1:]:
+                a(cont + chunk)
+        a("")
+        a(SEP_MINOR)
+
+    # Recommendations
+    if all_recs:
+        a("RECOMMENDATIONS")
+        for rec in all_recs:
+            pillar = rec.get("pillar", "")
+            detail = _asc(rec.get("detail", ""))
+            prefix = f"  {pillar:<20}  "
+            wrapped = _tw.wrap(detail, width=78 - len(prefix))
+            a(prefix + (wrapped[0] if wrapped else ""))
+            cont = " " * len(prefix)
+            for chunk in wrapped[1:]:
+                a(cont + chunk)
+        a("")
+        a(SEP_MINOR)
+
+    # Improvements
+    if all_improvements:
+        a("TO IMPROVE THIS ASSESSMENT")
+        for item in all_improvements[:3]:
+            lines.extend(_awrap(_asc(item)))
+        a("")
+        a(SEP_MINOR)
+
+    # Evidence gaps
+    if all_gaps:
+        a("EVIDENCE GAPS")
+        for gap in all_gaps:
+            lines.extend(_awrap(_asc(gap)))
+        a("")
+        a(SEP_MINOR)
+
+    # Footer
+    a(f"Tokens: {assessment.total_input_tokens:,} in / {assessment.total_output_tokens:,} out")
+    a(f"Estimated cost: ${assessment.estimated_cost_usd:.4f} USD")
+    a(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")

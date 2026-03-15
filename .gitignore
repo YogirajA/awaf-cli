@@ -209,3 +209,4 @@ CLAUDE.md
 
 # AWAF runtime data
 awaf.db
+*.txt
