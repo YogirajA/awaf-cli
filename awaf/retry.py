@@ -18,6 +18,7 @@ def with_retry(
     provider: LLMProvider,
     system_prompt: str,
     user_prompt: str,
+    artifact_content: str | None = None,
     max_retries: int = 3,
 ) -> ProviderResponse:
     """
@@ -35,7 +36,7 @@ def with_retry(
 
     for attempt in range(max_retries + 1):
         try:
-            return provider.complete(system_prompt, user_prompt)
+            return provider.complete(system_prompt, user_prompt, artifact_content)
         except (ProviderRateLimitError, ProviderTimeoutError) as exc:
             last_exc = exc
 

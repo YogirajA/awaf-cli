@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PillarResult:
     name: str
-    score: float  # 0–100
+    score: float  # 0-100
     confidence: str  # verified | partial | self_reported
     findings: list[dict[str, Any]] = field(default_factory=list)  # [{"severity":..., "detail":...}]
     recommendations: list[dict[str, Any]] = field(default_factory=list)  # [{"detail":...}]
@@ -46,24 +46,24 @@ Each assessment question carries a risk weight:
   Medium risk (2 pts): Creates significant operational risk
   Low risk (1 pt):     Best practice; absence is a warning
 
-pillar_score = (sum of implemented question weights / sum of all question weights) × 100
+pillar_score = (sum of implemented question weights / sum of all question weights) x 100
 Round to nearest integer.
 """
 
 _CONFIDENCE_GUIDE = """\
 CONFIDENCE:
-  verified      — Evidence provided and directly assessed; score reflects what you can see
-  partial       — Some evidence present; meaningful gaps remain; state gaps explicitly
-  self_reported — No evidence for this pillar; score reflects absence of evidence only
+  verified      -- Evidence provided and directly assessed; score reflects what you can see
+  partial       -- Some evidence present; meaningful gaps remain; state gaps explicitly
+  self_reported -- No evidence for this pillar; score reflects absence of evidence only
 """
 
 _RULES = """\
 RULES:
-- Never penalize for evidence not provided — mark self_reported and explain the gap
+- Never penalize for evidence not provided -- mark self_reported and explain the gap
 - Code, runbooks, IAM policies, eval reports, and operational docs are all equal evidence
 - One finding per issue, ordered Critical > High > Medium
 - One recommendation per finding; be specific and actionable (include file path or owner when evident)
-- self_reported confidence should still produce a score (typically 0–35) based on implied absence of controls
+- self_reported confidence should still produce a score (typically 0-35) based on implied absence of controls
 - If this pillar's criteria fundamentally do not apply to the agent's architecture (e.g., Reasoning
   Integrity for an agent that intentionally uses no tool/function calling), set not_applicable: true
   and explain why in na_reason. Do NOT score 0 for absent patterns that are intentionally absent.
@@ -121,15 +121,14 @@ class PillarAgent(ABC):
         Call the provider, parse the JSON response, and return a PillarResult.
         Retries are handled by with_retry(). Parse failures return a low-confidence result.
         """
-        user_prompt = (
-            f"Evaluate the following artifact content against the {self.name} pillar.\n\n"
-            f"{artifact_content}"
-        )
+        # Small pillar-specific question -- artifact passed separately for caching
+        user_prompt = f"Evaluate the above artifacts against the {self.name} pillar."
 
         response = with_retry(
             provider,
             system_prompt=self.system_prompt,
             user_prompt=user_prompt,
+            artifact_content=artifact_content,
             max_retries=max_retries,
         )
 
@@ -146,7 +145,7 @@ class PillarAgent(ABC):
             if text.startswith("```"):
                 lines = text.splitlines()
                 text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            # Extract outermost JSON object — tolerates leading/trailing prose
+            # Extract outermost JSON object -- tolerates leading/trailing prose
             start = text.find("{")
             end = text.rfind("}") + 1
             if start != -1 and end > start:

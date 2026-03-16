@@ -49,10 +49,18 @@ class GoogleProvider(LLMProvider):
                 model=self.config.model,
             )
 
-    def complete(self, system_prompt: str, user_prompt: str) -> ProviderResponse:
+    def complete(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        artifact_content: str | None = None,
+    ) -> ProviderResponse:
         from google import genai
         from google.genai import types
 
+        if artifact_content:
+            sep = chr(10) + chr(10)
+            user_prompt = artifact_content + sep + user_prompt
         client = genai.Client(api_key=self.config.api_key)
         model_name = self.config.model or self.default_model
 

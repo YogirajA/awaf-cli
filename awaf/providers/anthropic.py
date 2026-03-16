@@ -50,7 +50,12 @@ class AnthropicProvider(LLMProvider):
                 model=self.config.model,
             )
 
-    def complete(self, system_prompt: str, user_prompt: str) -> ProviderResponse:
+    def complete(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        artifact_content: str | None = None,
+    ) -> ProviderResponse:
         import anthropic
 
         client = anthropic.Anthropic(api_key=self.config.api_key)
@@ -70,17 +75,29 @@ class AnthropicProvider(LLMProvider):
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
-                # Cache the user prompt (artifact content) — same across all 10 pillars
+                # When artifact_content is provided it becomes its own cached block so all
+                # 10 pillar calls share one cache key. user_prompt is the small pillar question.
                 messages=[
                     {
                         "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": user_prompt,
-                                "cache_control": {"type": "ephemeral"},
-                            }
-                        ],
+                        "content": (
+                            [
+                                {
+                                    "type": "text",
+                                    "text": artifact_content,
+                                    "cache_control": {"type": "ephemeral"},
+                                },
+                                {"type": "text", "text": user_prompt},
+                            ]
+                            if artifact_content
+                            else [
+                                {
+                                    "type": "text",
+                                    "text": user_prompt,
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ]
+                        ),
                     }
                 ],
                 extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},

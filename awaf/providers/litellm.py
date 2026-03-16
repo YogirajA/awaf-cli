@@ -58,9 +58,17 @@ class LiteLLMProvider(LLMProvider):
                 model="",
             )
 
-    def complete(self, system_prompt: str, user_prompt: str) -> ProviderResponse:
+    def complete(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        artifact_content: str | None = None,
+    ) -> ProviderResponse:
         import litellm
 
+        if artifact_content:
+            sep = chr(10) + chr(10)
+            user_prompt = artifact_content + sep + user_prompt
         model = self.config.model
 
         t0 = time.monotonic()

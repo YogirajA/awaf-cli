@@ -52,13 +52,22 @@ class LLMProvider(ABC):
         self.config = config
 
     @abstractmethod
-    def complete(self, system_prompt: str, user_prompt: str) -> ProviderResponse:
+    def complete(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        artifact_content: str | None = None,
+    ) -> ProviderResponse:
         """
         Synchronous single-turn completion.
         Called by each pillar agent for its evaluation.
 
-        - system_prompt: AWAF pillar evaluation instructions
-        - user_prompt: serialized artifact content for this pillar
+        - system_prompt: AWAF pillar evaluation instructions (pillar-specific, small)
+        - user_prompt: the pillar evaluation question (small, varies per pillar)
+        - artifact_content: repo artifact text (large, identical across all pillars).
+          Providers that support prompt caching (Anthropic) send it as a separate cached
+          block so the cache key is shared across all 10 pillar calls. Other providers
+          prepend it to user_prompt. When None, user_prompt is sent as-is.
         - Must raise ProviderError on non-retryable failures
         - Must raise ProviderRateLimitError on rate limit / quota errors
         - Must raise ProviderTimeoutError on timeout
