@@ -28,13 +28,13 @@ awaf-cli is model-agnostic. Use any supported LLM provider — no vendor lock-in
 
 | Provider | Models | Key Env Var |
 |---|---|---|
-| `anthropic` | claude-opus-4-5, claude-sonnet-4-5, claude-haiku-4-5 | `ANTHROPIC_API_KEY` |
+| `anthropic` | claude-haiku-4-5-20251001 *(default)*, claude-sonnet-4-20250514, claude-opus-4-5 | `ANTHROPIC_API_KEY` |
 | `openai` | gpt-4o, gpt-4o-mini, o3, o4-mini | `OPENAI_API_KEY` |
 | `azure` | Any Azure OpenAI deployment | `AZURE_OPENAI_API_KEY` |
 | `google` | gemini-2.0-flash, gemini-1.5-pro | `GOOGLE_API_KEY` |
 | `litellm` | Any LiteLLM-compatible model | Provider-specific |
 
-Default provider: `anthropic` with `claude-opus-4-5`. Scores are calibrated on Claude; other providers may yield slight variance.
+Default provider: `anthropic` with `claude-haiku-4-5-20251001`. Scores are calibrated on Claude; other providers may yield slight variance.
 
 ---
 
@@ -220,7 +220,7 @@ jobs:
           # openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           # azure-openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
           provider: anthropic           # anthropic | openai | azure | google | litellm
-          model: claude-opus-4-5        # optional, uses provider default if omitted
+          model: claude-haiku-4-5-20251001  # optional; omit to use provider default (Haiku)
           project-name: my-agent
           fail-threshold: 60
           tier2-fail-threshold: 50
@@ -268,6 +268,7 @@ awaf run --provider openai --model gpt-4o        # override provider
 awaf run --provider litellm --model ollama/llama3 # local model via LiteLLM
 awaf run --sequential                            # one pillar at a time (avoids rate limits)
 awaf run --sequential --delay 10                 # sequential with 10s pause between pillars
+awaf run --model claude-opus-4-5                 # override model (default: claude-haiku-4-5-20251001)
 awaf history                                     # score history for current project
 awaf compare <id1> <id2>                         # diff two assessments
 awaf report --format json                        # JSON output for CI artifact upload
@@ -275,7 +276,7 @@ awaf report --coverage                           # show files analyzed and skipp
 awaf providers                                   # list configured providers and status
 ```
 
-No color codes when stdout is not a TTY. No spinners in CI mode.
+Progress is printed as each pillar starts (`▸ Evaluating Foundation...`). No color codes when stdout is not a TTY. No spinners in CI mode.
 
 ### Running pillars one at a time
 
@@ -344,7 +345,7 @@ Six months of CI runs become your architectural changelog.
 
 ## How It Works
 
-awaf-cli sends your architecture artifacts to the LLM provider of your choice. Each of the 10 AWAF pillars is evaluated by a separate model call running concurrently. Results are written to a local SQLite database. No central coordinator. No shared state between pillar evaluations.
+awaf-cli sends your architecture artifacts to the LLM provider of your choice. Each of the 10 AWAF pillars is evaluated by a separate model call running concurrently (default: 3 workers; configurable via `AWAF_CONCURRENCY`). Results are written to a local SQLite database. No central coordinator. No shared state between pillar evaluations.
 
 ```
 Artifacts → Ingestor → Event Bus → [10 Pillar Agents concurrently] → SQLite → Terminal
@@ -362,7 +363,7 @@ The tool is built to be AWAF-compliant itself: choreography over orchestration, 
 ```bash
 # Provider selection (can also be set in awaf.toml)
 AWAF_PROVIDER=anthropic          # anthropic | openai | azure | google | litellm
-AWAF_MODEL=claude-opus-4-5       # optional model override
+AWAF_MODEL=claude-haiku-4-5-20251001  # optional model override
 
 # API keys — use whichever provider you're running
 ANTHROPIC_API_KEY=sk-ant-...
@@ -376,7 +377,13 @@ GOOGLE_API_KEY=...
 AWAF_DB_URL=sqlite:///./awaf.db
 AWAF_MAX_ARTIFACTS_TOKENS=40000
 AWAF_SESSION_BUDGET_USD=1.00     # approximate; pricing varies by provider
+AWAF_CONCURRENCY=3               # concurrent pillar workers (default 3; 1 = sequential)
 AWAF_LOG_LEVEL=INFO
+
+# Anthropic: prompt caching is enabled automatically on system + user prompts.
+# Cached tokens do not count against the input TPM rate limit, reducing pressure
+# on Tier 1 plans (50K TPM for Haiku, 30K TPM for Sonnet/Opus).
+# Cache TTL is ~5 minutes; repeated runs within that window benefit most.
 ```
 
 ---

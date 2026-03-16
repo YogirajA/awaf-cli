@@ -25,6 +25,26 @@ logger = logging.getLogger(__name__)
 # Tier 2 pillars carry 1.5x weight per AWAF spec
 _TIER2 = {"Reasoning Integ.", "Controllability", "Context Integrity"}
 
+# Seconds between concurrent worker starts — spreads the initial burst of LLM
+# calls across a short window to reduce the chance of hitting rate limits on
+# the very first attempt.
+_STAGGER_S = 1.0
+
+
+def _run_with_cb(
+    agent: PillarAgent,
+    provider: LLMProvider,
+    content: str,
+    cb: Callable[[str], None] | None,
+    start_delay: float,
+) -> PillarResult:
+    """Optionally delay, fire the progress callback, then run the pillar."""
+    if start_delay > 0:
+        time.sleep(start_delay)
+    if cb:
+        cb(agent.name)
+    return agent.evaluate(provider, content)
+
 # All 10 pillar agents in assessment order
 ALL_AGENTS: list[PillarAgent] = [
     FoundationAgent(),
@@ -79,6 +99,7 @@ def run_assessment(
     estimate_cost_fn: Callable[[str, int, int], float] | None = None,
     model: str = "",
     pillar_delay_seconds: float = 0.0,
+    on_pillar_start: Callable[[str], None] | None = None,
 ) -> AssessmentResult:
     """
     Run all (or one) pillar agents against *artifact_content*.
@@ -100,7 +121,7 @@ def run_assessment(
     cumulative_cost = 0.0
     budget_exceeded = False
 
-    _concurrency = min(len(agents), int(os.environ.get("AWAF_CONCURRENCY", "5")))
+    _concurrency = min(len(agents), int(os.environ.get("AWAF_CONCURRENCY", "3")))
     _sequential = _concurrency == 1 or pillar_delay_seconds > 0
 
     if _sequential:
@@ -108,11 +129,13 @@ def run_assessment(
         # Useful for avoiding rate limits on low-tier API plans.
         for i, agent in enumerate(agents):
             if i > 0 and pillar_delay_seconds > 0:
-                logger.debug(
+                logger.info(
                     "Waiting %.0fs before next pillar (rate-limit delay).",
                     pillar_delay_seconds,
                 )
                 time.sleep(pillar_delay_seconds)
+            if on_pillar_start:
+                on_pillar_start(agent.name)
             try:
                 result = agent.evaluate(provider, artifact_content)
             except Exception as exc:
@@ -153,7 +176,10 @@ def run_assessment(
         # When a session budget is exceeded, queued futures can be cancelled before
         # they consume tokens — enforcing the spec's hard-stop rule.
         with ThreadPoolExecutor(max_workers=_concurrency) as pool:
-            futures = {pool.submit(a.evaluate, provider, artifact_content): a for a in agents}
+            futures = {
+                pool.submit(_run_with_cb, a, provider, artifact_content, on_pillar_start, i * _STAGGER_S): a
+                for i, a in enumerate(agents)
+            }
             for future in as_completed(futures):
                 agent = futures[future]
                 try:

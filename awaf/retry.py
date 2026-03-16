@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import time
 
 from awaf.providers.base import (
@@ -47,14 +48,16 @@ def with_retry(
             if isinstance(exc, ProviderRateLimitError) and exc.retry_after_seconds:
                 backoff = max(backoff, exc.retry_after_seconds)
 
+            jitter = random.uniform(0, min(backoff * 0.15 + 2, 15))
+            sleep_time = backoff + jitter
             logger.warning(
-                "Provider call failed (attempt %d/%d, %s). Retrying in %ds.",
+                "Provider call failed (attempt %d/%d, %s). Retrying in %.0fs.",
                 attempt + 1,
                 max_retries,
                 type(exc).__name__,
-                backoff,
+                sleep_time,
             )
-            time.sleep(backoff)
+            time.sleep(sleep_time)
 
     # Non-retryable exceptions propagate immediately; retryable ones reach here
     # only after exhaustion.

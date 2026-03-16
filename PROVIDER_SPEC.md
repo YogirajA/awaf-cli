@@ -228,8 +228,9 @@ def list_providers() -> list[str]:
 - Call `client.messages.create()` with `model`, `max_tokens`, `temperature`, `system`, `messages`
 - Map `response.usage.input_tokens` and `response.usage.output_tokens` to `ProviderResponse`
 - Token counting: use `client.beta.messages.count_tokens()` or tiktoken fallback
-- `default_model`: `"claude-opus-4-5"`
+- `default_model`: `"claude-haiku-4-5-20251001"` (50K TPM on Tier 1; ~20x cheaper than Opus)
 - `supports_system_prompt`: `True`
+- Prompt caching: add `cache_control: {"type": "ephemeral"}` to both system and user content blocks; pass `extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}`. Cache tokens (`cache_creation_input_tokens`, `cache_read_input_tokens`) must be included in `ProviderResponse.input_tokens` (use `getattr` with default 0 for SDK compatibility).
 - On `anthropic.APIStatusError` with status 429: raise `ProviderRateLimitError`, extract `retry-after` header if present
 - On `anthropic.APIStatusError` with status 401/403: raise `ProviderAuthError`
 - On `anthropic.APITimeoutError`: raise `ProviderTimeoutError`
@@ -379,9 +380,11 @@ def with_retry(
     Do not retry on: ProviderAuthError, ProviderConfigError, ProviderError (other)
     
     Backoff: 2^attempt seconds (1s, 2s, 4s), plus ProviderRateLimitError.retry_after_seconds if set.
-    
+    Jitter: add random.uniform(0, min(backoff * 0.15 + 2, 15)) to each sleep to prevent
+    thundering herd when multiple workers all receive the same Retry-After header.
+
     On exhaustion of retries: re-raise the last exception.
-    Log each retry attempt at WARNING level with attempt number and exception type.
+    Log each retry attempt at WARNING level with attempt number, exception type, and sleep duration.
     """
     ...
 ```
@@ -406,7 +409,7 @@ def with_retry(
 PRICING: dict[str, dict[str, float]] = {
     "claude-opus-4-5":   {"input": 15.00, "output": 75.00},
     "claude-sonnet-4-5": {"input":  3.00, "output": 15.00},
-    "claude-haiku-4-5":  {"input":  0.80, "output":  4.00},
+    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
     "gpt-4o":            {"input":  2.50, "output": 10.00},
     "gpt-4o-mini":       {"input":  0.15, "output":  0.60},
     "o3":                {"input": 10.00, "output": 40.00},
@@ -425,13 +428,13 @@ awaf providers
 
 Configured providers
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  anthropic   claude-opus-4-5     ✓ API key set    (ANTHROPIC_API_KEY)
+  anthropic   claude-haiku-4-5-20251001  ✓ API key set    (ANTHROPIC_API_KEY)
   openai      gpt-4o              ✗ API key missing (OPENAI_API_KEY)
   azure       —                   ✗ Not configured  (azure_endpoint missing)
   google      gemini-2.0-flash    ✗ API key missing (GOOGLE_API_KEY)
   litellm     —                   — No default model (set AWAF_MODEL or awaf.toml)
 
-Active provider (from awaf.toml): anthropic / claude-opus-4-5
+Active provider (from awaf.toml): anthropic / claude-haiku-4-5-20251001
 ```
 
 Status symbols: `✓` = ready, `✗` = not usable, `—` = partially configured
@@ -444,7 +447,7 @@ Status symbols: `✓` = ready, `✗` = not usable, `—` = partially configured
 
 ```sql
 ALTER TABLE assessments ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic';
-ALTER TABLE assessments ADD COLUMN model TEXT NOT NULL DEFAULT 'claude-opus-4-5';
+ALTER TABLE assessments ADD COLUMN model TEXT NOT NULL DEFAULT 'claude-haiku-4-5-20251001';
 ```
 
 `awaf history` output includes `provider/model` column (see README example).

@@ -320,6 +320,9 @@ def run(
         sys.exit(2)
 
     # Run pillar agents
+    def _on_pillar_start(name: str) -> None:
+        click.echo(f"  \u25b8 Evaluating {name}...")
+
     try:
         assessment = run_assessment(
             provider=llm_provider,
@@ -329,6 +332,7 @@ def run(
             estimate_cost_fn=estimate_cost,
             model=effective_model,
             pillar_delay_seconds=float(delay),
+            on_pillar_start=_on_pillar_start,
         )
     except ValueError as exc:
         click.echo(f"Assessment error: {exc}", err=True)

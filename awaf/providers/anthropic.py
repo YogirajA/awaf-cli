@@ -27,7 +27,7 @@ class AnthropicProvider(LLMProvider):
 
     @property
     def default_model(self) -> str:
-        return "claude-opus-4-5"
+        return "claude-haiku-4-5-20251001"
 
     @property
     def supports_system_prompt(self) -> bool:
@@ -62,8 +62,28 @@ class AnthropicProvider(LLMProvider):
                 model=model,
                 max_tokens=self.config.max_tokens,
                 temperature=self.config.temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
+                # Cache the system prompt (pillar criteria) — helps on repeated runs
+                system=[
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                # Cache the user prompt (artifact content) — same across all 10 pillars
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_prompt,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                    }
+                ],
+                extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
             )
         except anthropic.APIStatusError as exc:
             if exc.status_code == 429:
@@ -103,9 +123,16 @@ class AnthropicProvider(LLMProvider):
             b for b in response.content if hasattr(b, "text") and isinstance(b.text, str)
         ]
         content = text_blocks[0].text if text_blocks else ""
+
+        # Sum all input token types: regular + cache-creation + cache-read.
+        # cache_creation/read are not present on older SDK versions → default 0.
+        cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+        cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        total_input = response.usage.input_tokens + cache_create + cache_read
+
         return ProviderResponse(
             content=content,
-            input_tokens=response.usage.input_tokens,
+            input_tokens=total_input,
             output_tokens=response.usage.output_tokens,
             model=response.model,
             provider=self.config.provider_name,

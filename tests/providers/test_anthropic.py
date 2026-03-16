@@ -36,6 +36,8 @@ def test_complete_happy_path() -> None:
     mock_response.content = [MagicMock(text="Hello, world!")]
     mock_response.usage.input_tokens = 10
     mock_response.usage.output_tokens = 5
+    mock_response.usage.cache_creation_input_tokens = 0
+    mock_response.usage.cache_read_input_tokens = 0
     mock_response.model = "claude-opus-4-5"
     mock_response.model_dump.return_value = {}
 
