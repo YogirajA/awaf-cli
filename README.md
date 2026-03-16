@@ -91,32 +91,65 @@ awaf run --provider litellm --model bedrock/anthropic.claude-3-5-sonnet-20241022
 ```
 
 ```
+   _      _  _  _    _      ___
+  /_\    | || || |  /_\    | __|
+ / _ \   | \/ \/ | / _ \   | _|
+/_/ \_\   \_/\_/  /_/ \_\  |_       Agent Well-Architected Framework
+
 AWAF Assessment: my-agent
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AWAF v1.0  |  2026-03-15  |  openai / gpt-4o
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Overall Score    78/100   Near Ready
+  Close to production. Address findings before deploying.
 
-  Overall Score    78  Near Ready
-  Provider         openai / gpt-4o
+  Scale: Production Ready >=90 · Near Ready >=75 · Needs Work >=50
+         High Risk >=25 · Not Ready <25
+  Foundation <40 = automatic FAIL regardless of overall score.
+  Tier 2 pillars (Reasoning, Controllability, Context Integrity) carry 1.5x weight.
 
-  TIER 0: FOUNDATION
-  Foundation        85  verified
-
-  TIER 1: CLOUD WAF ADAPTED
-  Op. Excellence    74  verified
-  Security          82  verified
-  Reliability       71  verified
-  Performance       80  verified
-  Cost Optim.       65  partial
-  Sustainability    79  verified
-
-  TIER 2: AGENT-NATIVE  (1.5x weight)
-  Reasoning Integ.  71  partial
-  Controllability   78  verified
-  Context Integrity 80  verified
+┌──────────────────────┬───────┬────────────┬────────────┬────────┐
+│ Pillar               │ Score │ Progress   │ Confidence │ Status │
+╞══════════════════════╪═══════╪════════════╪════════════╪════════╡
+│ TIER 0 -- FOUNDATION                                            │
+├──────────────────────┼───────┼────────────┼────────────┼────────┤
+│ Foundation           │    85 │ [########] │ verified   │   PASS │
+╞══════════════════════╪═══════╪════════════╪════════════╪════════╡
+│ TIER 1 -- CLOUD WAF ADAPTED                                     │
+├──────────────────────┼───────┼────────────┼────────────┼────────┤
+│ Op. Excellence       │    74 │ [#######  ] │ verified   │        │
+│ Security             │    82 │ [########] │ verified   │        │
+│ Reliability          │    71 │ [#######  ] │ verified   │        │
+│ Performance          │    80 │ [########] │ verified   │        │
+│ Cost Optim.          │    65 │ [######   ] │ partial    │        │
+│ Sustainability       │    79 │ [########] │ verified   │        │
+╞══════════════════════╪═══════╪════════════╪════════════╪════════╡
+│ TIER 2 -- AGENT-NATIVE  (1.5x weight)                          │
+├──────────────────────┼───────┼────────────┼────────────┼────────┤
+│ Reasoning Integ.     │    71 │ [#######  ] │ partial    │   1.5x │
+│ Controllability      │    78 │ [########] │ verified   │   1.5x │
+│ Context Integrity    │    80 │ [########] │ verified   │   1.5x │
+└──────────────────────┴───────┴────────────┴────────────┴────────┘
 
   FILES ANALYZED     12 files
-  FILES NOT SCANNED  infra/iam.yaml  Cost score confidence: partial
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FINDINGS  (ordered by severity)
+  [High     ]  Cost Optim.         No session budget cap; runaway token spend possible
+  [Medium   ]  Reasoning Integ.    Evals present but hallucination rate not measured
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  RECOMMENDATIONS
+  Cost Optim.         Add AWAF_SESSION_BUDGET_USD env var and wire hard stop in
+                      agent loop before tool dispatch
+  Reasoning Integ.    Instrument LangSmith eval run to capture hallucination rate
+                      alongside tool selection accuracy
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  TO IMPROVE THIS ASSESSMENT
+  Share LangSmith or Braintrust eval output to upgrade Reasoning Integ.
+  from partial to verified
+  Share token usage dashboard or budget alert config to verify Cost Optim.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 ---
