@@ -46,7 +46,7 @@ _DEFAULT_EXCLUDE = [
 # Filenames always excluded regardless of extension
 _DEFAULT_EXCLUDE_FILES = {
     "awaf-report.txt",  # awaf's own output — not agent architecture artifacts
-    "awaf.db",          # SQLite history database
+    "awaf.db",  # SQLite history database
 }
 
 
