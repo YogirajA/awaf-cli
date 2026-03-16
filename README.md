@@ -107,28 +107,28 @@ AWAF v1.0  |  2026-03-15  |  openai / gpt-4o
   Foundation <40 = automatic FAIL regardless of overall score.
   Tier 2 pillars (Reasoning, Controllability, Context Integrity) carry 1.5x weight.
 
-┌──────────────────────┬───────┬────────────┬────────────┬────────┐
-│ Pillar               │ Score │ Progress   │ Confidence │ Status │
-╞══════════════════════╪═══════╪════════════╪════════════╪════════╡
-│ TIER 0 -- FOUNDATION                                            │
-├──────────────────────┼───────┼────────────┼────────────┼────────┤
-│ Foundation           │    85 │ [########] │ verified   │   PASS │
-╞══════════════════════╪═══════╪════════════╪════════════╪════════╡
-│ TIER 1 -- CLOUD WAF ADAPTED                                     │
-├──────────────────────┼───────┼────────────┼────────────┼────────┤
-│ Op. Excellence       │    74 │ [#######  ] │ verified   │        │
-│ Security             │    82 │ [########] │ verified   │        │
-│ Reliability          │    71 │ [#######  ] │ verified   │        │
-│ Performance          │    80 │ [########] │ verified   │        │
-│ Cost Optim.          │    65 │ [######   ] │ partial    │        │
-│ Sustainability       │    79 │ [########] │ verified   │        │
-╞══════════════════════╪═══════╪════════════╪════════════╪════════╡
-│ TIER 2 -- AGENT-NATIVE  (1.5x weight)                          │
-├──────────────────────┼───────┼────────────┼────────────┼────────┤
-│ Reasoning Integ.     │    71 │ [#######  ] │ partial    │   1.5x │
-│ Controllability      │    78 │ [########] │ verified   │   1.5x │
-│ Context Integrity    │    80 │ [########] │ verified   │   1.5x │
-└──────────────────────┴───────┴────────────┴────────────┴────────┘
+┌──────────────────────┬───────┬──────────────┬────────────┬─────────┐
+│ Pillar               │ Score │ Progress     │ Confidence │  Status │
+╞══════════════════════╪═══════╪══════════════╪════════════╪═════════╡
+│ TIER 0 -- FOUNDATION                                               │
+├──────────────────────┼───────┼──────────────┼────────────┼─────────┤
+│ Foundation           │    85 │ [########  ] │ verified   │    PASS │
+╞══════════════════════╪═══════╪══════════════╪════════════╪═════════╡
+│ TIER 1 -- CLOUD WAF ADAPTED                                        │
+├──────────────────────┼───────┼──────────────┼────────────┼─────────┤
+│ Op. Excellence       │    74 │ [#######   ] │ verified   │         │
+│ Security             │    82 │ [########  ] │ verified   │         │
+│ Reliability          │    71 │ [#######   ] │ verified   │         │
+│ Performance          │    80 │ [########  ] │ verified   │         │
+│ Cost Optim.          │    65 │ [######    ] │ partial    │         │
+│ Sustainability       │    79 │ [########  ] │ verified   │         │
+╞══════════════════════╪═══════╪══════════════╪════════════╪═════════╡
+│ TIER 2 -- AGENT-NATIVE  (1.5x weight)                              │
+├──────────────────────┼───────┼──────────────┼────────────┼─────────┤
+│ Reasoning Integ.     │    71 │ [#######   ] │ partial    │    1.5x │
+│ Controllability      │    78 │ [########  ] │ verified   │    1.5x │
+│ Context Integrity    │    80 │ [########  ] │ verified   │    1.5x │
+└──────────────────────┴───────┴──────────────┴────────────┴─────────┘
 
   FILES ANALYZED     12 files
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
