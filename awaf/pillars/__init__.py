@@ -122,7 +122,7 @@ def run_assessment(
     cumulative_cost = 0.0
     budget_exceeded = False
 
-    _concurrency = min(len(agents), int(os.environ.get("AWAF_CONCURRENCY", "3")))
+    _concurrency = min(len(agents), int(os.environ.get("AWAF_CONCURRENCY", "1")))
     _sequential = _concurrency == 1 or pillar_delay_seconds > 0
 
     if _sequential:

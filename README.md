@@ -6,7 +6,7 @@ The reference implementation of the AWAF open specification. Catch agent archite
 [![Python](https://img.shields.io/pypi/pyversions/awaf)](https://pypi.org/project/awaf/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-Runs in CI on every PR that touches agent code. Scores across 10 architectural pillars defined by the AWAF open specification. Fails the build when something regresses.
+Scores across 10 architectural pillars defined by the AWAF open specification. Designed to run periodically -- nightly, weekly, or on-demand before releases -- not on every commit. Each run makes 10 LLM calls; run it when architecture decisions change, not when typos are fixed.
 
 No dashboards that need a legend. No compliance jargon. One number per pillar, one finding per issue, one fix per finding.
 
@@ -201,12 +201,13 @@ terminal_format = "compact"    # compact | full | json
 
 ```yaml
 name: AWAF Assessment
+# Recommended: run on a schedule, not on every commit.
+# Each run makes 10 LLM calls. Architecture changes slowly;
+# nightly or weekly is usually the right cadence.
 on:
-  pull_request:
-    paths:
-      - 'agents/**'
-      - 'tools/**'
-      - 'pipelines/**'
+  schedule:
+    - cron: '0 6 * * 1'   # every Monday at 06:00 UTC
+  workflow_dispatch:         # on-demand: run before releases or after major changes
 
 jobs:
   awaf:
@@ -228,7 +229,9 @@ jobs:
           post-pr-comment: true
 ```
 
-AWAF only runs when agent files change. Unrelated commits are skipped (exit 3).
+**Recommended cadence:** weekly schedule or on-demand before releases. Running on every PR makes sense only for teams actively refactoring agent architecture. For most teams, weekly is sufficient -- architecture changes slowly.
+
+If you do run on PRs, use `on: pull_request` with a `paths:` filter so only agent-relevant changes trigger it. AWAF also exits 3 automatically when no agent files changed (configurable via `agent_patterns` in `awaf.toml`).
 
 ### GitLab CI
 
@@ -266,8 +269,8 @@ awaf run --ci                                    # CI mode with git context
 awaf run --pillar foundation                     # single pillar only
 awaf run --provider openai --model gpt-4o        # override provider
 awaf run --provider litellm --model ollama/llama3 # local model via LiteLLM
-awaf run --sequential                            # one pillar at a time (avoids rate limits)
-awaf run --sequential --delay 10                 # sequential with 10s pause between pillars
+awaf run --parallel                              # concurrent mode (faster, higher cost)
+awaf run --delay 10                              # sequential with 10s pause between pillars
 awaf run --model claude-opus-4-5                 # override model (default: claude-haiku-4-5-20251001)
 awaf history                                     # score history for current project
 awaf compare <id1> <id2>                         # diff two assessments
@@ -289,10 +292,10 @@ awaf run --pillar controllability
 # ... pick the pillars you care about
 ```
 
-To score all 10 pillars sequentially with a pause between each call:
+To add a pause between sequential pillar calls (useful on rate-limited API plans):
 
 ```bash
-awaf run --sequential --delay 15
+awaf run --delay 15
 ```
 
 ---
@@ -345,10 +348,10 @@ Six months of CI runs become your architectural changelog.
 
 ## How It Works
 
-awaf-cli sends your architecture artifacts to the LLM provider of your choice. Each of the 10 AWAF pillars is evaluated by a separate model call running concurrently (default: 3 workers; configurable via `AWAF_CONCURRENCY`). Results are written to a local SQLite database. No central coordinator. No shared state between pillar evaluations.
+awaf-cli sends your architecture artifacts to the LLM provider of your choice. Each of the 10 AWAF pillars is evaluated by a separate model call running sequentially by default (enables prompt cache sharing for ~90% cost reduction on Anthropic). Use `--parallel` for concurrent execution. Results are written to a local SQLite database. No central coordinator. No shared state between pillar evaluations.
 
 ```
-Artifacts → Ingestor → Event Bus → [10 Pillar Agents concurrently] → SQLite → Terminal
+Artifacts → Ingestor → Event Bus → [10 Pillar Agents sequentially] → SQLite → Terminal
                                           ↑
                               Provider Abstraction Layer
                          (Anthropic | OpenAI | Azure | Google | LiteLLM)
@@ -377,7 +380,7 @@ GOOGLE_API_KEY=...
 AWAF_DB_URL=sqlite:///./awaf.db
 AWAF_MAX_ARTIFACTS_TOKENS=40000
 AWAF_SESSION_BUDGET_USD=1.00     # approximate; pricing varies by provider
-AWAF_CONCURRENCY=3               # concurrent pillar workers (default 3; 1 = sequential)
+AWAF_CONCURRENCY=1               # pillar workers (default 1 = sequential/economical; set higher for --parallel override)
 AWAF_LOG_LEVEL=INFO
 
 # Anthropic: prompt caching is enabled automatically on system + user prompts.
@@ -453,13 +456,13 @@ model = "claude-sonnet-4-5"
 
 The default model (`claude-haiku-4-5-20251001`) is fast and cheap but occasionally produces invalid JSON on codebases with large artifact payloads. If you see this warning on more than one pillar per run, switching to Sonnet will resolve it.
 
-**Run sequentially to isolate the failing pillar**
+**Isolate the failing pillar**
+
+The default sequential mode already prints each pillar as it completes. Add a delay to slow things down further:
 
 ```bash
-awaf run --sequential --delay 5
+awaf run --delay 5
 ```
-
-Sequential mode prints each pillar as it completes, making it easier to identify which pillar is failing before switching models.
 
 ---
 

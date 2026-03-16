@@ -122,7 +122,7 @@ tests/
 - **Do not use `black` or `isort`.** `ruff format` handles formatting; `ruff check --fix` handles import sorting.
 - **Azure adapter uses `azure_deployment` for the API call, not `config.model`.** `config.model` is display-only for Azure.
 - **`AWAF_SESSION_BUDGET_USD` is an estimation guardrail, not a hard billing limit.** Do not treat it as precise.
-- **The 10 pillar agents run concurrently.** Do not add any shared mutable state between them.
+- **The 10 pillar agents run sequentially by default** (economical: enables prompt cache sharing for ~90% artifact token savings on Anthropic). Use `--parallel` for concurrent mode. Do not add any shared mutable state between them.
 - **`awaf run` skips assessment and exits 3 when no agent files changed.** This is intentional, not a bug.
 - **Optional provider SDKs.** If `anthropic`, `openai`, etc. are not installed, raise `ProviderConfigError` with the install hint. Do not let the SDK import fail with an unhandled `ImportError`.
 

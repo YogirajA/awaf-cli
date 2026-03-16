@@ -192,17 +192,17 @@ def cli() -> None:
     help="Azure OpenAI deployment name.",
 )
 @click.option(
-    "--sequential",
+    "--parallel",
     is_flag=True,
     default=False,
-    help="Run pillars one at a time (avoids rate limits; slower).",
+    help="Run up to 5 pillar evaluations concurrently (faster but higher cost; disables prompt cache sharing).",
 )
 @click.option(
     "--delay",
     default=0,
     metavar="SECONDS",
     type=int,
-    help="Seconds to wait between pillars when running sequentially (implies --sequential).",
+    help="Seconds to wait between pillar calls (useful for rate-limited API plans).",
 )
 @click.option(
     "--out",
@@ -230,7 +230,7 @@ def run(
     model: str | None,
     azure_endpoint: str | None,
     azure_deployment: str | None,
-    sequential: bool,
+    parallel: bool,
     delay: int,
     out: str,
     no_artifact: bool,
@@ -259,9 +259,9 @@ def run(
     if azure_deployment:
         os.environ["AZURE_OPENAI_DEPLOYMENT"] = azure_deployment
 
-    # Sequential mode: limit concurrency to 1
-    if sequential or delay > 0:
-        os.environ["AWAF_CONCURRENCY"] = "1"
+    # Parallel mode: override the economical default (sequential) with concurrent workers
+    if parallel and "AWAF_CONCURRENCY" not in os.environ:
+        os.environ["AWAF_CONCURRENCY"] = "5"
 
     # Resolve and validate provider
     try:
