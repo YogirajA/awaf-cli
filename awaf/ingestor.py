@@ -43,6 +43,12 @@ _DEFAULT_EXCLUDE = [
     "build",
 ]
 
+# Filenames always excluded regardless of extension
+_DEFAULT_EXCLUDE_FILES = {
+    "awaf-report.txt",  # awaf's own output — not agent architecture artifacts
+    "awaf.db",          # SQLite history database
+}
+
 
 @dataclass
 class IngestorResult:
@@ -74,7 +80,12 @@ def ingest(
 
     for base_path in paths:
         base_path = os.path.abspath(base_path)
-        candidates = [base_path] if os.path.isfile(base_path) else _walk(base_path, excludes)
+        if os.path.isfile(base_path):
+            if os.path.basename(base_path).lower() in _DEFAULT_EXCLUDE_FILES:
+                continue
+            candidates = [base_path]
+        else:
+            candidates = _walk(base_path, excludes)
 
         for abs_path in candidates:
             rel_path = os.path.relpath(abs_path)
@@ -124,6 +135,8 @@ def _walk(base: str, excludes: set[str]) -> list[str]:
         # Prune excluded directories in-place so os.walk skips them
         dirnames[:] = [d for d in dirnames if d not in excludes and not d.startswith(".")]
         for fname in filenames:
+            if fname.lower() in _DEFAULT_EXCLUDE_FILES:
+                continue
             ext = os.path.splitext(fname)[1].lower()
             if ext in _SUPPORTED_EXTS or fname.lower() in {"dockerfile", "makefile"}:
                 results.append(os.path.join(dirpath, fname))
