@@ -24,7 +24,12 @@ If `uv` is not available: `pip install uv --break-system-packages && uv sync`
 
 ## Commands
 
-Run these before every commit. All must pass clean.
+**MANDATORY before every `git push`:** run the full check below and confirm it exits 0. Never push if it fails.
+
+```bash
+# Full check (what CI runs) — must be green before pushing
+uv run ruff format --check . && uv run ruff check . && uv run mypy awaf/ && uv run pytest tests/ -m "not integration"
+```
 
 ```bash
 # Format + lint (ruff handles both; do not use black or flake8)
@@ -42,9 +47,6 @@ uv run pytest tests/ -m integration --timeout=60
 
 # Single file
 uv run pytest tests/providers/test_openai.py -x -v
-
-# Full check (what CI runs)
-uv run ruff format --check . && uv run ruff check . && uv run mypy awaf/ && uv run pytest tests/ -m "not integration"
 ```
 
 ---
