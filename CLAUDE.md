@@ -20,6 +20,12 @@ source .venv/bin/activate  # or use `uv run` prefix
 
 If `uv` is not available: `pip install uv --break-system-packages && uv sync`
 
+After cloning, activate the pre-commit hook (runs ruff format + fix automatically):
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ---
 
 ## Commands
