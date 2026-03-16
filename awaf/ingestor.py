@@ -28,7 +28,8 @@ _SUPPORTED_EXTS = {
     ".sh",
 }
 
-_MAX_FILE_BYTES = 200_000  # skip files over 200 KB
+_MAX_FILE_BYTES = 100_000  # skip files over 100 KB
+_MAX_FILE_LINES = int(os.environ.get("AWAF_MAX_FILE_LINES", "500"))  # truncate long files
 _DEFAULT_MAX_TOKENS = int(os.environ.get("AWAF_MAX_ARTIFACTS_TOKENS", "40000"))
 
 _DEFAULT_EXCLUDE = [
@@ -47,6 +48,18 @@ _DEFAULT_EXCLUDE = [
 _DEFAULT_EXCLUDE_FILES = {
     "awaf-report.txt",  # awaf's own output — not agent architecture artifacts
     "awaf.db",  # SQLite history database
+    # Lock files — pure dependency manifests, no architecture signal, can be 10k–50k tokens
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "pipfile.lock",
+    "cargo.lock",
+    "uv.lock",
+    "composer.lock",
+    "gemfile.lock",
+    "go.sum",
+    "packages.lock.json",  # NuGet
 }
 
 
@@ -145,4 +158,12 @@ def _walk(base: str, excludes: set[str]) -> list[str]:
 
 def _read_file(path: str) -> str:
     with open(path, encoding="utf-8", errors="replace") as fh:
-        return fh.read()
+        lines = fh.readlines()
+    if len(lines) > _MAX_FILE_LINES:
+        truncated = lines[:_MAX_FILE_LINES]
+        truncated.append(
+            f"\n# ... [{len(lines) - _MAX_FILE_LINES} lines truncated"
+            f" — set AWAF_MAX_FILE_LINES to include more]\n"
+        )
+        return "".join(truncated)
+    return "".join(lines)
