@@ -45,6 +45,7 @@ def _run_with_cb(
         cb(agent.name)
     return agent.evaluate(provider, content)
 
+
 # All 10 pillar agents in assessment order
 ALL_AGENTS: list[PillarAgent] = [
     FoundationAgent(),
@@ -177,7 +178,9 @@ def run_assessment(
         # they consume tokens — enforcing the spec's hard-stop rule.
         with ThreadPoolExecutor(max_workers=_concurrency) as pool:
             futures = {
-                pool.submit(_run_with_cb, a, provider, artifact_content, on_pillar_start, i * _STAGGER_S): a
+                pool.submit(
+                    _run_with_cb, a, provider, artifact_content, on_pillar_start, i * _STAGGER_S
+                ): a
                 for i, a in enumerate(agents)
             }
             for future in as_completed(futures):
