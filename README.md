@@ -414,6 +414,55 @@ Live badge (cloud mode):
 
 ---
 
+## Troubleshooting
+
+### Pillars score 0 / "unparseable JSON" warning
+
+**Symptom**
+
+```
+Pillar 'Foundation' returned unparseable JSON: Expecting ',' delimiter: line 111 column 6 (char 16195)
+```
+
+The pillar gets a score of 0 and `confidence: self_reported` instead of a real evaluation.
+
+**Cause**
+
+Some models — particularly smaller or quantized variants — produce JSON that violates the spec when the response is long (code snippets, multi-line findings). `awaf-cli` attempts automatic repair via [`json-repair`](https://github.com/mangiucugna/json-repair), but repair can fail when the output is severely malformed.
+
+**Workaround: upgrade to a more capable model**
+
+```bash
+# Anthropic — Sonnet or Opus handles long structured output reliably
+awaf run --model claude-sonnet-4-5
+awaf run --model claude-opus-4-5
+
+# OpenAI
+awaf run --provider openai --model gpt-4o
+
+# Local via LiteLLM — try a larger quant
+awaf run --provider litellm --model ollama/llama3:70b
+```
+
+Or set it permanently in `awaf.toml`:
+
+```toml
+[provider]
+model = "claude-sonnet-4-5"
+```
+
+The default model (`claude-haiku-4-5-20251001`) is fast and cheap but occasionally produces invalid JSON on codebases with large artifact payloads. If you see this warning on more than one pillar per run, switching to Sonnet will resolve it.
+
+**Run sequentially to isolate the failing pillar**
+
+```bash
+awaf run --sequential --delay 5
+```
+
+Sequential mode prints each pillar as it completes, making it easier to identify which pillar is failing before switching models.
+
+---
+
 ## Contributing
 
 Bug reports, feature requests, and PRs welcome. Provider adapter contributions especially welcome — see `PROVIDER_SPEC.md` for the interface contract.

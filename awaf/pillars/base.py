@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from json_repair import repair_json
+
 from awaf.providers.base import LLMProvider
 from awaf.retry import with_retry
 
@@ -141,7 +143,16 @@ class PillarAgent(ABC):
             end = text.rfind("}") + 1
             if start != -1 and end > start:
                 text = text[start:end]
-            data = json.loads(text)
+            # Try strict parse first; fall back to repair for malformed LLM output
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                repaired = repair_json(text, return_objects=True)
+                if not isinstance(repaired, dict):
+                    raise ValueError(  # noqa: TRY301
+                        f"repair_json returned {type(repaired).__name__}, expected dict"
+                    ) from None
+                data = repaired
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("Pillar '%s' returned unparseable JSON: %s", self.name, exc)
             return PillarResult(
