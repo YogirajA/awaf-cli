@@ -31,6 +31,8 @@ class PillarResult:
     output_tokens: int = 0
     skipped: bool = False
     skip_reason: str = ""
+    not_applicable: bool = False
+    na_reason: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +64,9 @@ RULES:
 - One finding per issue, ordered Critical > High > Medium
 - One recommendation per finding; be specific and actionable (include file path or owner when evident)
 - self_reported confidence should still produce a score (typically 0–35) based on implied absence of controls
+- If this pillar's criteria fundamentally do not apply to the agent's architecture (e.g., Reasoning
+  Integrity for an agent that intentionally uses no tool/function calling), set not_applicable: true
+  and explain why in na_reason. Do NOT score 0 for absent patterns that are intentionally absent.
 """
 
 _JSON_SCHEMA = """\
@@ -76,8 +81,11 @@ Return ONLY valid JSON (no markdown fences, no commentary before or after) with 
     {"detail": "<specific actionable fix with location or owner>"}
   ],
   "evidence_gaps": ["<what is missing and which pillar it affects>"],
-  "improve_suggestions": ["<specific evidence item that would upgrade confidence, ranked by impact>"]
+  "improve_suggestions": ["<specific evidence item that would upgrade confidence, ranked by impact>"],
+  "not_applicable": <true|false>,
+  "na_reason": "<why this pillar does not apply to this agent's architecture, or empty string>"
 }
+If not_applicable is true, set score to 0 and omit findings/recommendations (empty arrays are fine).
 """
 
 
@@ -165,6 +173,7 @@ class PillarAgent(ABC):
                 evidence_gaps=["LLM response was not valid JSON; re-run to retry"],
             )
 
+        not_applicable = bool(data.get("not_applicable", False))
         return PillarResult(
             name=self.name,
             score=float(data.get("score", 0)),
@@ -173,6 +182,8 @@ class PillarAgent(ABC):
             recommendations=list(data.get("recommendations", [])),
             evidence_gaps=list(data.get("evidence_gaps", [])),
             improve_suggestions=list(data.get("improve_suggestions", [])),
+            not_applicable=not_applicable,
+            na_reason=str(data.get("na_reason", "")),
         )
 
     @staticmethod

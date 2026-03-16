@@ -216,6 +216,12 @@ def cli() -> None:
     default=False,
     help="Disable artifact file output.",
 )
+@click.option(
+    "--allow-partial-scan",
+    is_flag=True,
+    default=False,
+    help="Continue assessment even when the token budget cuts off files (risky: may produce misleading scores).",
+)
 def run(
     paths: tuple[str, ...],
     ci: bool,
@@ -228,6 +234,7 @@ def run(
     delay: int,
     out: str,
     no_artifact: bool,
+    allow_partial_scan: bool,
 ) -> None:
     """Assess agent architecture against AWAF v1.0 across 10 pillars."""
     import json as _json
@@ -319,6 +326,59 @@ def run(
         click.echo("No agent files found to analyze. Check --paths or awaf.toml [files].", err=True)
         sys.exit(2)
 
+    # Abort if token budget was exhausted — a partial codebase produces misleading scores
+    if ingest_result.truncated and not allow_partial_scan:
+        token_skipped = [s for s in ingest_result.files_skipped if "token limit" in s]
+        click.echo("", err=True)
+        click.echo("ERROR: Token budget exhausted — assessment aborted.", err=True)
+        click.echo("", err=True)
+        click.echo(
+            f"  {len(token_skipped)} file(s) were not scanned. Scoring a partial codebase",
+            err=True,
+        )
+        click.echo(
+            "  produces misleading grades, so awaf refuses to proceed.",
+            err=True,
+        )
+        click.echo("", err=True)
+        click.echo("  Skipped files:", err=True)
+        for s in token_skipped[:10]:
+            click.echo(f"    {s}", err=True)
+        if len(token_skipped) > 10:
+            click.echo(f"    ... and {len(token_skipped) - 10} more", err=True)
+        click.echo("", err=True)
+        click.echo("  Fixes:", err=True)
+        click.echo(
+            "    1. Narrow the scan:   awaf run --paths agents/ src/core/",
+            err=True,
+        )
+        click.echo(
+            "    2. Raise the budget:  AWAF_MAX_ARTIFACTS_TOKENS=80000 awaf run",
+            err=True,
+        )
+        click.echo(
+            "    3. Override (risky):  awaf run --allow-partial-scan",
+            err=True,
+        )
+        click.echo("", err=True)
+        sys.exit(2)
+
+    # Build artifact content; prepend coverage note when partial scan is explicitly allowed
+    artifact_content = ingest_result.content
+    if ingest_result.truncated and allow_partial_scan:
+        token_skipped = [s for s in ingest_result.files_skipped if "token limit" in s]
+        note_lines = [
+            "[COVERAGE NOTE]",
+            "The following files were NOT scanned due to token budget limits:",
+        ]
+        note_lines += [f"  - {s.split('  ')[0].strip()}" for s in token_skipped]
+        note_lines += [
+            "Do NOT penalize for absent evidence in these files.",
+            "List them in evidence_gaps and use confidence 'partial'.",
+            "",
+        ]
+        artifact_content = "\n".join(note_lines) + "\n" + artifact_content
+
     # Run pillar agents
     def _on_pillar_start(name: str) -> None:
         click.echo(f"  \u25b8 Evaluating {name}...")
@@ -326,7 +386,7 @@ def run(
     try:
         assessment = run_assessment(
             provider=llm_provider,
-            artifact_content=ingest_result.content,
+            artifact_content=artifact_content,
             pillar_filter=pillar,
             session_budget_usd=budget_usd,
             estimate_cost_fn=estimate_cost,
@@ -581,14 +641,34 @@ def _pillar_table_lines(assessment: object) -> list[str]:
 
     rows: list[str] = [top, hdr]
 
+    def _r_score(r: object) -> float | None:
+        from awaf.pillars.base import PillarResult as _PR
+
+        assert isinstance(r, _PR)
+        return None if (r.skipped or r.not_applicable) else r.score
+
+    def _r_conf(r: object) -> str | None:
+        from awaf.pillars.base import PillarResult as _PR
+
+        assert isinstance(r, _PR)
+        if r.not_applicable:
+            return "n/a"
+        return None if r.skipped else r.confidence
+
     # Tier 0
     rows.append(tsep)
     rows.append(hrow("TIER 0 — FOUNDATION"))
     rows.append(mid)
     for r in assessment.pillar_results:
         if r.name == "Foundation":
-            st = "PASS" if (r.score is not None and r.score >= 40) else "FAIL"
-            rows.append(drow(r.name, r.score, r.confidence, st))
+            from awaf.pillars.base import PillarResult as _PR
+
+            assert isinstance(r, _PR)
+            if r.not_applicable:
+                st = "N/A"
+            else:
+                st = "PASS" if (r.score is not None and r.score >= 40) else "FAIL"
+            rows.append(drow(r.name, _r_score(r), _r_conf(r), st))
 
     # Tier 1
     tier1 = {
@@ -604,7 +684,7 @@ def _pillar_table_lines(assessment: object) -> list[str]:
     rows.append(mid)
     for r in assessment.pillar_results:
         if r.name in tier1:
-            rows.append(drow(r.name, r.score, r.confidence))
+            rows.append(drow(r.name, _r_score(r), _r_conf(r)))
 
     # Tier 2
     rows.append(tsep)
@@ -613,7 +693,7 @@ def _pillar_table_lines(assessment: object) -> list[str]:
     tier2 = {"Reasoning Integ.", "Controllability", "Context Integrity"}
     for r in assessment.pillar_results:
         if r.name in tier2:
-            rows.append(drow(r.name, r.score, r.confidence, "1.5x"))
+            rows.append(drow(r.name, _r_score(r), _r_conf(r), "1.5x"))
 
     rows.append(bot)
     return rows
