@@ -136,6 +136,11 @@ class PillarAgent(ABC):
             if text.startswith("```"):
                 lines = text.splitlines()
                 text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            # Extract outermost JSON object — tolerates leading/trailing prose
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start != -1 and end > start:
+                text = text[start:end]
             data = json.loads(text)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("Pillar '%s' returned unparseable JSON: %s", self.name, exc)
