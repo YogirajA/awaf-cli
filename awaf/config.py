@@ -2,8 +2,20 @@ from __future__ import annotations
 
 import os
 import tomllib
+from dataclasses import dataclass, field
 
 from awaf.providers.base import ProviderConfig
+
+
+@dataclass
+class CiConfig:
+    """Configuration for CI-mode scheduling and change detection (awaf.toml [ci] section)."""
+
+    enabled: bool = True
+    schedule: str | None = None  # cron expression; None means always run
+    change_detection: bool = False
+    watch_paths: list[str] = field(default_factory=list)
+
 
 # Environment variable names per provider
 _API_KEY_ENV: dict[str, str] = {
@@ -90,4 +102,24 @@ def resolve_provider_config(
         azure_endpoint=azure_endpoint,
         azure_deployment=azure_deployment,
         azure_api_version=azure_api_version,
+    )
+
+
+def resolve_ci_config(toml_path: str = "awaf.toml") -> CiConfig:
+    """
+    Read the [ci] section from awaf.toml and return a CiConfig.
+
+    Fields:
+      enabled         — set to false to disable CI-mode checks entirely (default: true)
+      schedule        — cron expression; if set, awaf skips unless current time matches
+      change_detection — whether to check git diff before running (default: false)
+      watch_paths     — directories to watch; any changed file under them triggers a run
+    """
+    toml_data = _read_toml(toml_path)
+    ci = toml_data.get("ci", {})
+    return CiConfig(
+        enabled=bool(ci.get("enabled", True)),
+        schedule=ci.get("schedule") or None,
+        change_detection=bool(ci.get("change_detection", False)),
+        watch_paths=list(ci.get("watch_paths", [])),
     )

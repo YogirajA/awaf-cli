@@ -172,57 +172,157 @@ def run_assessment(
                         )
                     break
     else:
-        # Concurrent path — each pillar is an independent LLM call with no shared state.
-        # max_workers is capped below len(agents) so that some futures stay queued.
-        # When a session budget is exceeded, queued futures can be cancelled before
-        # they consume tokens — enforcing the spec's hard-stop rule.
-        with ThreadPoolExecutor(max_workers=_concurrency) as pool:
-            futures = {
-                pool.submit(
-                    _run_with_cb, a, provider, artifact_content, on_pillar_start, i * _STAGGER_S
-                ): a
-                for i, a in enumerate(agents)
-            }
-            for future in as_completed(futures):
-                agent = futures[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    logger.warning("Pillar '%s' failed: %s", agent.name, exc)
-                    result = PillarResult(
-                        name=agent.name,
-                        score=0.0,
-                        confidence="self_reported",
-                        skipped=True,
-                        skip_reason=str(exc),
-                    )
-                results.append(result)
+        # Smart concurrent path — Foundation runs first (writes the prompt cache), then
+        # the remaining 9 pillars run in parallel (all cache reads at ~10% token cost).
+        # Falls back to a plain concurrent pool when Foundation is not in the agent list.
+        foundation_agent = next((a for a in agents if a.name == "Foundation"), None)
+        remaining_agents = [a for a in agents if a.name != "Foundation"]
 
-                # Track budget
-                if estimate_cost_fn and session_budget_usd is not None:
-                    cost = estimate_cost_fn(model, result.input_tokens, result.output_tokens)
-                    cumulative_cost += cost
-                    if cumulative_cost >= session_budget_usd:
-                        budget_exceeded = True
-                        logger.warning(
-                            "Session budget $%.4f reached after '%s'. Skipping remaining pillars.",
-                            session_budget_usd,
-                            agent.name,
+        if foundation_agent and remaining_agents:
+            # Phase 1: Foundation — primes the prompt cache (blocking)
+            if on_pillar_start:
+                on_pillar_start(foundation_agent.name)
+            try:
+                f_result = foundation_agent.evaluate(provider, artifact_content)
+            except Exception as exc:
+                logger.warning("Pillar 'Foundation' failed: %s", exc)
+                f_result = PillarResult(
+                    name="Foundation",
+                    score=0.0,
+                    confidence="self_reported",
+                    skipped=True,
+                    skip_reason=str(exc),
+                )
+            results.append(f_result)
+
+            # Budget check after Foundation
+            if estimate_cost_fn and session_budget_usd is not None:
+                cost = estimate_cost_fn(model, f_result.input_tokens, f_result.output_tokens)
+                cumulative_cost += cost
+                if cumulative_cost >= session_budget_usd:
+                    budget_exceeded = True
+                    logger.warning(
+                        "Session budget $%.4f reached after 'Foundation'. Skipping remaining pillars.",
+                        session_budget_usd,
+                    )
+                    for a in remaining_agents:
+                        results.append(
+                            PillarResult(
+                                name=a.name,
+                                score=0.0,
+                                confidence="budget_exceeded",
+                                skipped=True,
+                                skip_reason="session budget exceeded",
+                            )
                         )
-                        # Cancel pending futures — mark those agents as skipped
-                        for f, a in futures.items():
-                            if not f.done():
-                                f.cancel()
-                                results.append(
-                                    PillarResult(
-                                        name=a.name,
-                                        score=0.0,
-                                        confidence="budget_exceeded",
-                                        skipped=True,
-                                        skip_reason="session budget exceeded",
-                                    )
+                    remaining_agents = []
+
+            # Phase 2: Remaining pillars concurrently — cache already warm
+            if remaining_agents:
+                with ThreadPoolExecutor(max_workers=_concurrency) as pool:
+                    futures = {
+                        pool.submit(
+                            _run_with_cb,
+                            a,
+                            provider,
+                            artifact_content,
+                            on_pillar_start,
+                            i * _STAGGER_S,
+                        ): a
+                        for i, a in enumerate(remaining_agents)
+                    }
+                    for future in as_completed(futures):
+                        agent = futures[future]
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            logger.warning("Pillar '%s' failed: %s", agent.name, exc)
+                            result = PillarResult(
+                                name=agent.name,
+                                score=0.0,
+                                confidence="self_reported",
+                                skipped=True,
+                                skip_reason=str(exc),
+                            )
+                        results.append(result)
+
+                        if estimate_cost_fn and session_budget_usd is not None:
+                            cost = estimate_cost_fn(
+                                model, result.input_tokens, result.output_tokens
+                            )
+                            cumulative_cost += cost
+                            if cumulative_cost >= session_budget_usd:
+                                budget_exceeded = True
+                                logger.warning(
+                                    "Session budget $%.4f reached after '%s'. Skipping remaining pillars.",
+                                    session_budget_usd,
+                                    agent.name,
                                 )
-                        break
+                                for f, a in futures.items():
+                                    if not f.done():
+                                        f.cancel()
+                                        results.append(
+                                            PillarResult(
+                                                name=a.name,
+                                                score=0.0,
+                                                confidence="budget_exceeded",
+                                                skipped=True,
+                                                skip_reason="session budget exceeded",
+                                            )
+                                        )
+                                break
+        else:
+            # No Foundation in filter (e.g. --pillar security) — plain concurrent pool
+            with ThreadPoolExecutor(max_workers=_concurrency) as pool:
+                futures = {
+                    pool.submit(
+                        _run_with_cb,
+                        a,
+                        provider,
+                        artifact_content,
+                        on_pillar_start,
+                        i * _STAGGER_S,
+                    ): a
+                    for i, a in enumerate(agents)
+                }
+                for future in as_completed(futures):
+                    agent = futures[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        logger.warning("Pillar '%s' failed: %s", agent.name, exc)
+                        result = PillarResult(
+                            name=agent.name,
+                            score=0.0,
+                            confidence="self_reported",
+                            skipped=True,
+                            skip_reason=str(exc),
+                        )
+                    results.append(result)
+
+                    if estimate_cost_fn and session_budget_usd is not None:
+                        cost = estimate_cost_fn(model, result.input_tokens, result.output_tokens)
+                        cumulative_cost += cost
+                        if cumulative_cost >= session_budget_usd:
+                            budget_exceeded = True
+                            logger.warning(
+                                "Session budget $%.4f reached after '%s'. Skipping remaining pillars.",
+                                session_budget_usd,
+                                agent.name,
+                            )
+                            for f, a in futures.items():
+                                if not f.done():
+                                    f.cancel()
+                                    results.append(
+                                        PillarResult(
+                                            name=a.name,
+                                            score=0.0,
+                                            confidence="budget_exceeded",
+                                            skipped=True,
+                                            skip_reason="session budget exceeded",
+                                        )
+                                    )
+                            break
 
     # Re-order results to match ALL_AGENTS order for consistent display
     order = {a.name: i for i, a in enumerate(ALL_AGENTS)}

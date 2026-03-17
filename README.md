@@ -188,10 +188,28 @@ warn_only = false
 agent_patterns = ["agents/**/*.py", "tools/**/*.py", "pipelines/**"]
 exclude = ["tests/**", "docs/**"]
 
+[ci]
+enabled = true
+schedule = "0 9 * * 1"        # cron (UTC): only run when this schedule fires
+change_detection = true        # skip if no files changed under watch_paths
+watch_paths = [
+    "src/agents",
+    "src/signals",
+]
+
 [reporting]
 post_pr_comment = true
 terminal_format = "compact"    # compact | full | json
 ```
+
+### CI Config Fields
+
+| Field | Default | Description |
+|---|---|---|
+| `ci.enabled` | `true` | Set `false` to disable all CI-mode checks |
+| `ci.schedule` | (none) | Cron expression (UTC). `awaf run --ci` skips if current time is outside ±5 min of a scheduled fire |
+| `ci.change_detection` | `false` | Skip when no files under `watch_paths` changed |
+| `ci.watch_paths` | `[]` | Directory prefixes to watch. Falls back to `[files].agent_patterns` when not set |
 
 ---
 

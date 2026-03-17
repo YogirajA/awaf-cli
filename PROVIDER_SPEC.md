@@ -498,22 +498,61 @@ If a provider's SDK is not installed and the user attempts to use it, raise `Pro
 
 ## Implementation Checklist
 
-- [ ] `awaf/providers/base.py` — `LLMProvider`, `ProviderConfig`, `ProviderResponse`, all exception classes
-- [ ] `awaf/providers/__init__.py` — `ProviderRegistry`, `get_provider()`, `list_providers()`
-- [ ] `awaf/providers/anthropic.py` — `AnthropicProvider`
-- [ ] `awaf/providers/openai.py` — `OpenAIProvider`
-- [ ] `awaf/providers/azure.py` — `AzureOpenAIProvider`
-- [ ] `awaf/providers/google.py` — `GoogleProvider`
-- [ ] `awaf/providers/litellm.py` — `LiteLLMProvider`
-- [ ] `awaf/config.py` — `resolve_provider_config()`, toml + env var resolution
-- [ ] `awaf/retry.py` — `with_retry()` with exponential backoff
-- [ ] `awaf/pricing.py` — pricing table + `estimate_cost()`
-- [ ] `awaf/db.py` — schema migration for `provider` and `model` columns
-- [ ] `awaf/cli.py` — `--provider`, `--model` flags on `run`; `providers` subcommand
-- [ ] `tests/providers/test_anthropic.py`
-- [ ] `tests/providers/test_openai.py`
-- [ ] `tests/providers/test_azure.py`
-- [ ] `tests/providers/test_google.py`
-- [ ] `tests/providers/test_litellm.py`
-- [ ] `pyproject.toml` — optional extras for each provider SDK
-- [ ] README — updated with provider table, config examples, env vars
+- [x] `awaf/providers/base.py` — `LLMProvider`, `ProviderConfig`, `ProviderResponse`, all exception classes
+- [x] `awaf/providers/__init__.py` — `ProviderRegistry`, `get_provider()`, `list_providers()`
+- [x] `awaf/providers/anthropic.py` — `AnthropicProvider` (prompt caching: artifact + system blocks cached)
+- [x] `awaf/providers/openai.py` — `OpenAIProvider`
+- [x] `awaf/providers/azure.py` — `AzureOpenAIProvider`
+- [x] `awaf/providers/google.py` — `GoogleProvider`
+- [x] `awaf/providers/litellm.py` — `LiteLLMProvider`
+- [x] `awaf/config.py` — `resolve_provider_config()` + `resolve_ci_config()` + `CiConfig` dataclass
+- [x] `awaf/retry.py` — `with_retry()` with exponential backoff
+- [x] `awaf/pricing.py` — pricing table + `estimate_cost()`
+- [x] `awaf/db.py` — schema migration for `provider` and `model` columns
+- [x] `awaf/cli.py` — `--provider`, `--model`, `--parallel` flags; `providers` subcommand; CI schedule + watch_paths
+- [x] `awaf/ingestor.py` — file minification (`_minify()`) for ~15% token reduction
+- [x] `awaf/pillars/__init__.py` — Foundation-first parallelization in `--parallel` mode
+- [x] `tests/providers/test_anthropic.py`
+- [x] `tests/providers/test_openai.py`
+- [x] `tests/providers/test_azure.py`
+- [x] `tests/providers/test_google.py`
+- [x] `tests/providers/test_litellm.py`
+- [x] `pyproject.toml` — optional extras for each provider SDK; `croniter` for CI scheduling
+- [x] README — updated with provider table, config examples, env vars
+
+---
+
+## CI Integration Config
+
+The `[ci]` section in `awaf.toml` controls when awaf evaluates in CI pipelines.
+
+```toml
+[ci]
+enabled = true
+schedule = "0 9 * * 1"    # cron expression (UTC); skip if current time doesn't match
+change_detection = true
+watch_paths = [
+    "src/agents",
+    "src/signals",
+]
+```
+
+**Fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Set `false` to disable all CI checks |
+| `schedule` | string | `null` | Cron expression (UTC). If set, `awaf run --ci` skips unless current UTC time is within ±5 min of a scheduled fire. Requires `croniter` (included in base deps). |
+| `change_detection` | bool | `false` | If `true`, skip when no files under `watch_paths` changed |
+| `watch_paths` | list[str] | `[]` | Directory prefixes to watch (e.g. `"src/agents"`). Any changed file whose path starts with a prefix triggers a run. Falls back to `[files].agent_patterns` when not set. |
+
+**Exit codes in CI mode:**
+
+| Code | Meaning |
+|---|---|
+| 0 | Assessment passed thresholds |
+| 1 | Assessment failed thresholds or regression detected |
+| 2 | Configuration or ingest error |
+| 3 | Skipped (schedule mismatch, no watched files changed, or no agent files changed) |
+
+**Resolved by:** `awaf/config.py:resolve_ci_config()`

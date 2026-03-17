@@ -4,10 +4,11 @@ import io
 import os
 import sys
 import tomllib
+from datetime import UTC
 
 import click
 
-from awaf.config import resolve_provider_config
+from awaf.config import resolve_ci_config, resolve_provider_config
 from awaf.providers import get_provider
 from awaf.providers.base import ProviderConfigError
 
@@ -295,12 +296,46 @@ def run(
         except Exception:
             pass
 
-        # CI: exit 3 if no agent files changed
-        toml_files = toml_data.get("files", {})
-        agent_patterns = toml_files.get("agent_patterns", ["agents/**", "tools/**", "pipelines/**"])
-        if not _any_agent_files_changed(agent_patterns):
-            click.echo("No agent files changed. Skipping AWAF assessment. (exit 3)")
-            sys.exit(3)
+        # CI: cron schedule check — skip if current time doesn't match schedule
+        ci_config = resolve_ci_config()
+        if ci_config.schedule:
+            from datetime import datetime, timedelta
+
+            try:
+                from croniter import croniter  # type: ignore[import-untyped]
+
+                now = datetime.now(tz=UTC)
+                cron = croniter(ci_config.schedule, now - timedelta(minutes=5))
+                next_fire = cron.get_next(datetime)
+                if abs((next_fire - now).total_seconds()) > 300:
+                    click.echo(
+                        f"awaf: Not scheduled for this time window (schedule: {ci_config.schedule}). Skipping. (exit 3)"
+                    )
+                    sys.exit(3)
+            except ImportError:
+                click.echo(
+                    "awaf: croniter not installed; ignoring schedule. Run: uv add croniter",
+                    err=True,
+                )
+
+        # CI: watch_paths change detection
+        if ci_config.change_detection and ci_config.watch_paths:
+            changed_files = _get_changed_files()
+            watched_changed = any(f.startswith(tuple(ci_config.watch_paths)) for f in changed_files)
+            if not watched_changed:
+                click.echo(
+                    f"awaf: No changes under watch_paths {ci_config.watch_paths}. Skipping. (exit 3)"
+                )
+                sys.exit(3)
+        elif not ci_config.change_detection or not ci_config.watch_paths:
+            # Fall back to legacy agent_patterns check
+            toml_files = toml_data.get("files", {})
+            agent_patterns = toml_files.get(
+                "agent_patterns", ["agents/**", "tools/**", "pipelines/**"]
+            )
+            if not _any_agent_files_changed(agent_patterns):
+                click.echo("No agent files changed. Skipping AWAF assessment. (exit 3)")
+                sys.exit(3)
 
     import contextlib
 
@@ -705,8 +740,8 @@ def _print_run_pillars(assessment: object) -> None:
         click.echo(line)
 
 
-def _any_agent_files_changed(patterns: list[str]) -> bool:
-    """Return True if any files matching patterns are in the git diff."""
+def _get_changed_files() -> set[str]:
+    """Return the set of files changed in HEAD~1..HEAD, or empty set on error."""
     import subprocess
 
     try:
@@ -714,12 +749,19 @@ def _any_agent_files_changed(patterns: list[str]) -> bool:
             ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
             stderr=subprocess.DEVNULL,
         ).decode()
-        changed = set(diff.splitlines())
-        import fnmatch
-
-        return any(fnmatch.fnmatch(f, pat) for f in changed for pat in patterns)
+        return set(diff.splitlines())
     except Exception:
+        return set()
+
+
+def _any_agent_files_changed(patterns: list[str]) -> bool:
+    """Return True if any files matching patterns are in the git diff."""
+    import fnmatch
+
+    changed = _get_changed_files()
+    if not changed:
         return True  # can't determine; proceed with assessment
+    return any(fnmatch.fnmatch(f, pat) for f in changed for pat in patterns)
 
 
 def _today() -> str:
