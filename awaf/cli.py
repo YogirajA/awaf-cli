@@ -223,6 +223,12 @@ def cli() -> None:
     default=False,
     help="Continue assessment even when the token budget cuts off files (risky: may produce misleading scores).",
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Skip change detection and schedule checks; always run the assessment.",
+)
 def run(
     paths: tuple[str, ...],
     ci: bool,
@@ -236,6 +242,7 @@ def run(
     out: str,
     no_artifact: bool,
     allow_partial_scan: bool,
+    force: bool,
 ) -> None:
     """Assess agent architecture against AWAF v1.0 across 10 pillars."""
     import json as _json
@@ -298,7 +305,9 @@ def run(
 
         # CI: cron schedule check — skip if current time doesn't match schedule
         ci_config = resolve_ci_config()
-        if ci_config.schedule:
+        if force:
+            pass  # --force bypasses all skip checks
+        elif ci_config.schedule:
             from datetime import datetime, timedelta
 
             try:
@@ -318,24 +327,27 @@ def run(
                     err=True,
                 )
 
-        # CI: watch_paths change detection
-        if ci_config.change_detection and ci_config.watch_paths:
-            changed_files = _get_changed_files()
-            watched_changed = any(f.startswith(tuple(ci_config.watch_paths)) for f in changed_files)
-            if not watched_changed:
-                click.echo(
-                    f"awaf: No changes under watch_paths {ci_config.watch_paths}. Skipping. (exit 3)"
+        # CI: watch_paths change detection (skipped when --force)
+        if not force:
+            if ci_config.change_detection and ci_config.watch_paths:
+                changed_files = _get_changed_files()
+                watched_changed = any(
+                    f.startswith(tuple(ci_config.watch_paths)) for f in changed_files
                 )
-                sys.exit(3)
-        elif not ci_config.change_detection or not ci_config.watch_paths:
-            # Fall back to legacy agent_patterns check
-            toml_files = toml_data.get("files", {})
-            agent_patterns = toml_files.get(
-                "agent_patterns", ["agents/**", "tools/**", "pipelines/**"]
-            )
-            if not _any_agent_files_changed(agent_patterns):
-                click.echo("No agent files changed. Skipping AWAF assessment. (exit 3)")
-                sys.exit(3)
+                if not watched_changed:
+                    click.echo(
+                        f"awaf: No changes under watch_paths {ci_config.watch_paths}. Skipping. (exit 3)"
+                    )
+                    sys.exit(3)
+            elif not ci_config.change_detection or not ci_config.watch_paths:
+                # Fall back to legacy agent_patterns check
+                toml_files = toml_data.get("files", {})
+                agent_patterns = toml_files.get(
+                    "agent_patterns", ["agents/**", "tools/**", "pipelines/**"]
+                )
+                if not _any_agent_files_changed(agent_patterns):
+                    click.echo("No agent files changed. Skipping AWAF assessment. (exit 3)")
+                    sys.exit(3)
 
     import contextlib
 
