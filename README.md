@@ -482,6 +482,30 @@ The default sequential mode already prints each pillar as it completes. Add a de
 awaf run --delay 5
 ```
 
+### Score variability and apparent regressions
+
+**Symptom**
+
+Multiple pillars score the same value (e.g., six pillars all at 42), or a pillar score drops after a change unrelated to that pillar (e.g., Foundation drops after adding a runbook).
+
+**Cause: model behavior (score clustering)**
+
+All pillar evaluations run at `temperature=0.0` (deterministic). However, smaller models like `claude-haiku-4-5-20251001` anchor to a specific score — typically in the 40–45 range — when evidence is present but incomplete (`partial` confidence). This is the model's calibrated "partial credit" score, not a bug. Running the same codebase twice will produce the same score; it looks suspicious in a table but is consistent.
+
+**Cause: cross-pillar impression bleed**
+
+Every pillar receives the full artifact. If you add evidence that belongs to a different pillar (e.g., a runbook improves Op. Excellence), the model may slightly adjust its overall impression of the codebase, shifting unrelated pillar scores by ±5–10 points. awaf's pillar prompts instruct the model to score only within each pillar's domain, but smaller models are more susceptible to holistic reading.
+
+**What to do**
+
+- **Don't chase single-run regressions.** A 5-point drop in one pillar after an unrelated change is noise, not signal. Track the **overall score trend** across multiple runs.
+- **Use a stronger model for stable scoring.** Sonnet and Opus show much less clustering and cross-pillar bleed than Haiku:
+  ```bash
+  awaf run --model claude-sonnet-4-6
+  ```
+- **Gate CI on overall score, not individual pillars.** Set `regression_limit` in `awaf.toml` to trigger only on meaningful overall drops (default: 10 points).
+- **Run sequentially (default).** Prompt caching keeps the artifact impression consistent across all 10 pillar calls. `--parallel` disables this shared cache.
+
 ---
 
 ## Contributing

@@ -59,6 +59,10 @@ CONFIDENCE:
 
 _RULES = """\
 RULES:
+- SCOPE: Score ONLY evidence directly relevant to this pillar's criteria listed in \
+'## What to Assess' above. Evidence that belongs to other pillars (runbooks → Op. Excellence, \
+not Foundation; cost controls → Cost Optim., not Security; etc.) must NOT influence this \
+pillar's score or confidence level.
 - Never penalize for evidence not provided -- mark self_reported and explain the gap
 - Code, runbooks, IAM policies, eval reports, and operational docs are all equal evidence
 - One finding per issue, ordered Critical > High > Medium
