@@ -96,6 +96,14 @@ awaf run --provider litellm --model bedrock/anthropic.claude-3-5-sonnet-20241022
  / _ \   | \/ \/ | / _ \   | _|
 /_/ \_\   \_/\_/  /_/ \_\  |_       Agent Well-Architected Framework
 
+  PREFLIGHT
+  Artifacts          12,450 tokens  (12 files)
+  Context window    128,000 tokens  (gpt-4o)
+  Per-pillar est     13,350 tokens  (10% of window)
+  Total est         133,500 tokens  (10 pillars × ~13,350)
+  Cost est               ~$0.0093
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 AWAF Assessment: my-agent
 AWAF v1.0  |  2026-03-15  |  openai / gpt-4o
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -131,6 +139,8 @@ AWAF v1.0  |  2026-03-15  |  openai / gpt-4o
 └──────────────────────┴───────┴──────────────┴────────────┴─────────┘
 
   FILES ANALYZED     12 files
+  TOKENS             133,450 in / 41,000 out  (peak call: 11% of 128K window)
+  COST (est)         ~$0.0093
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   FINDINGS  (ordered by severity)
@@ -369,11 +379,13 @@ Six months of CI runs become your architectural changelog.
 awaf-cli sends your architecture artifacts to the LLM provider of your choice. Each of the 10 AWAF pillars is evaluated by a separate model call running sequentially by default (enables prompt cache sharing for ~90% cost reduction on Anthropic). Use `--parallel` for concurrent execution. Results are written to a local SQLite database. No central coordinator. No shared state between pillar evaluations.
 
 ```
-Artifacts → Ingestor → Event Bus → [10 Pillar Agents sequentially] → SQLite → Terminal
-                                          ↑
-                              Provider Abstraction Layer
-                         (Anthropic | OpenAI | Azure | Google | LiteLLM)
+Artifacts → Ingestor → Preflight check → [10 Pillar Agents sequentially] → Validator → SQLite → Terminal
+                                                    ↑                           ↑
+                                        Provider Abstraction Layer       Dead letter quarantine
+                                   (Anthropic | OpenAI | Azure | Google | LiteLLM)
 ```
+
+The preflight step estimates token usage and cost before any API calls are made, and aborts if the artifact set would overflow the model's context window or exceed a session budget. The validator checks each pillar result for signs of truncation, known pathological scores, or score clustering, and excludes suspect results from the overall score.
 
 The tool is built to be AWAF-compliant itself: choreography over orchestration, vertical slice per pillar, blast radius bounded. See ARCHITECTURE.md.
 
@@ -397,7 +409,8 @@ GOOGLE_API_KEY=...
 # Session controls
 AWAF_DB_URL=sqlite:///./awaf.db
 AWAF_MAX_ARTIFACTS_TOKENS=40000
-AWAF_SESSION_BUDGET_USD=1.00     # approximate; pricing varies by provider
+AWAF_SESSION_BUDGET_USD=1.00     # approximate; abort before run if preflight estimate exceeds this
+AWAF_MAX_CONTEXT_PCT=85          # abort if per-pillar token estimate exceeds this % of context window
 AWAF_CONCURRENCY=1               # pillar workers (default 1 = sequential/economical; set higher for --parallel override)
 AWAF_LOG_LEVEL=INFO
 
@@ -495,6 +508,16 @@ All pillar evaluations run at `temperature=0.0` (deterministic). However, smalle
 **Cause: cross-pillar impression bleed**
 
 Every pillar receives the full artifact. If you add evidence that belongs to a different pillar (e.g., a runbook improves Op. Excellence), the model may slightly adjust its overall impression of the codebase, shifting unrelated pillar scores by ±5–10 points. awaf's pillar prompts instruct the model to score only within each pillar's domain, but smaller models are more susceptible to holistic reading.
+
+**Dead letter detection (v0.3.0+)**
+
+awaf-cli automatically detects and quarantines suspect results before they reach the overall score:
+
+- **Known pathology scores** (e.g., Haiku anchoring at 42) are flagged and excluded.
+- **Output truncation**: if a pillar's response was cut off mid-stream (output tokens near the provider's `max_tokens` limit), the result is quarantined rather than silently scored as 0.
+- **Score clustering**: if 3 or more pillars return the same integer score, the cluster is flagged as possible model anchoring.
+
+Suspect pillars are shown in a `SUSPECT RESULTS` block in the output and marked with `!` in the pillar table. They are excluded from the overall score calculation. The run still completes; only the contaminated pillars are removed.
 
 **What to do**
 
