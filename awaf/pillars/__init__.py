@@ -19,6 +19,7 @@ from awaf.pillars.reliability import ReliabilityAgent
 from awaf.pillars.security import SecurityAgent
 from awaf.pillars.sustainability import SustainabilityAgent
 from awaf.providers.base import LLMProvider
+from awaf.validator import validate_assessment_cluster, validate_pillar_result
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ class AssessmentResult:
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     estimated_cost_usd: float = 0.0
+    suspect_warnings: list[str] = field(default_factory=list)
 
 
 def compute_overall_score(results: list[PillarResult]) -> float:
@@ -82,7 +84,7 @@ def compute_overall_score(results: list[PillarResult]) -> float:
     total_weight = 0.0
     weighted_sum = 0.0
     for r in results:
-        if r.skipped or r.not_applicable:
+        if r.skipped or r.not_applicable or r.suspect:
             continue
         weight = 1.5 if r.name in _TIER2 else 1.0
         weighted_sum += r.score * weight
@@ -139,6 +141,7 @@ def run_assessment(
                 on_pillar_start(agent.name)
             try:
                 result = agent.evaluate(provider, artifact_content)
+                result = validate_pillar_result(result, provider.config.max_tokens)
             except Exception as exc:
                 logger.warning("Pillar '%s' failed: %s", agent.name, exc)
                 result = PillarResult(
@@ -184,6 +187,7 @@ def run_assessment(
                 on_pillar_start(foundation_agent.name)
             try:
                 f_result = foundation_agent.evaluate(provider, artifact_content)
+                f_result = validate_pillar_result(f_result, provider.config.max_tokens)
             except Exception as exc:
                 logger.warning("Pillar 'Foundation' failed: %s", exc)
                 f_result = PillarResult(
@@ -235,6 +239,7 @@ def run_assessment(
                         agent = futures[future]
                         try:
                             result = future.result()
+                            result = validate_pillar_result(result, provider.config.max_tokens)
                         except Exception as exc:
                             logger.warning("Pillar '%s' failed: %s", agent.name, exc)
                             result = PillarResult(
@@ -289,6 +294,7 @@ def run_assessment(
                     agent = futures[future]
                     try:
                         result = future.result()
+                        result = validate_pillar_result(result, provider.config.max_tokens)
                     except Exception as exc:
                         logger.warning("Pillar '%s' failed: %s", agent.name, exc)
                         result = PillarResult(
@@ -328,6 +334,9 @@ def run_assessment(
     order = {a.name: i for i, a in enumerate(ALL_AGENTS)}
     results.sort(key=lambda r: order.get(r.name, 99))
 
+    # Cross-pillar cluster detection (mutates results in-place before scoring)
+    cluster_warnings = validate_assessment_cluster(results)
+
     overall = compute_overall_score(results)
     foundation = next((r for r in results if r.name == "Foundation"), None)
     foundation_passed = foundation is None or foundation.score >= 40
@@ -344,6 +353,7 @@ def run_assessment(
         total_input_tokens=total_in,
         total_output_tokens=total_out,
         estimated_cost_usd=cost,
+        suspect_warnings=cluster_warnings,
     )
 
 

@@ -33,6 +33,8 @@ class PillarResult:
     skip_reason: str = ""
     not_applicable: bool = False
     na_reason: str = ""
+    suspect: bool = False
+    suspect_reason: str = ""
 
 
 # ---------------------------------------------------------------------------
