@@ -410,6 +410,64 @@ def run(
         click.echo("", err=True)
         sys.exit(2)
 
+    # Preflight token estimation — always shown (useful in CI logs), auto-aborts on overflow
+    from awaf.pillars import ALL_AGENTS as _all_agents
+    from awaf.pricing import CONTEXT_WINDOW, FALLBACK_CONTEXT_WINDOW
+
+    ctx_window = CONTEXT_WINDOW.get(effective_model, FALLBACK_CONTEXT_WINDOW)
+    _est_system = 900  # conservative system+user prompt overhead per pillar call
+    _n_pillars = len([a for a in _all_agents if pillar is None or pillar.lower() in a.name.lower()])
+    est_per_pillar = ingest_result.total_tokens + _est_system
+    ctx_pct = (est_per_pillar / ctx_window) * 100
+    est_total_input = est_per_pillar * _n_pillars
+    est_output_total = config.max_tokens * _n_pillars
+    from awaf.pricing import estimate_cost as _estimate_cost
+
+    est_preflight_cost = _estimate_cost(effective_model, est_total_input, est_output_total)
+
+    click.echo("  PREFLIGHT")
+    click.echo(
+        f"  Artifacts      {ingest_result.total_tokens:>9,} tokens"
+        f"  ({len(ingest_result.files_scanned)} files)"
+    )
+    click.echo(f"  Context window {ctx_window:>9,} tokens  ({effective_model})")
+    click.echo(f"  Per-pillar est {est_per_pillar:>9,} tokens  ({ctx_pct:.0f}% of window)")
+    click.echo(
+        f"  Total est      {est_total_input:>9,} tokens"
+        f"  ({_n_pillars} pillars × ~{est_per_pillar:,})"
+    )
+    click.echo(f"  Cost est            ~${est_preflight_cost:.4f}")
+    click.echo(_SEP)
+
+    # Auto-abort: artifacts fill too much of the context window
+    _max_ctx_pct = float(os.environ.get("AWAF_MAX_CONTEXT_PCT", "85"))
+    if ctx_pct >= _max_ctx_pct:
+        click.echo(
+            f"ERROR: artifacts occupy {ctx_pct:.0f}% of the {effective_model} context window"
+            f" (limit: {_max_ctx_pct:.0f}%). Assessment aborted — scores would be unreliable.",
+            err=True,
+        )
+        click.echo(
+            "  Fix: awaf run --paths <narrower-scope>  or"
+            "  AWAF_MAX_ARTIFACTS_TOKENS=<lower> awaf run",
+            err=True,
+        )
+        click.echo("  Override: AWAF_MAX_CONTEXT_PCT=95 awaf run", err=True)
+        sys.exit(2)
+
+    # Auto-abort: estimated cost already exceeds session budget — don't start the run
+    if budget_usd is not None and est_preflight_cost > budget_usd:
+        click.echo(
+            f"ERROR: estimated cost ~${est_preflight_cost:.4f} exceeds session budget"
+            f" ${budget_usd:.4f}. Assessment aborted.",
+            err=True,
+        )
+        click.echo(
+            "  Fix: raise AWAF_SESSION_BUDGET_USD or narrow --paths / --pillar",
+            err=True,
+        )
+        sys.exit(2)
+
     # Build artifact content; prepend coverage note when partial scan is explicitly allowed
     artifact_content = ingest_result.content
     if ingest_result.truncated and allow_partial_scan:
@@ -475,7 +533,32 @@ def run(
             click.echo(f"    {s}")
     if assessment.budget_exceeded:
         click.echo("  WARNING: session budget exceeded; some pillars skipped")
+
+    # Token / context window utilization footer
+    _ctx_win = CONTEXT_WINDOW.get(effective_model, FALLBACK_CONTEXT_WINDOW)
+    _peak_input = max(
+        (r.input_tokens for r in assessment.pillar_results if r.input_tokens),
+        default=0,
+    )
+    _ctx_pct_actual = (_peak_input / _ctx_win * 100) if _ctx_win else 0.0
+    click.echo(
+        f"  TOKENS             {assessment.total_input_tokens:,} in /"
+        f" {assessment.total_output_tokens:,} out"
+        f"  (peak call: {_ctx_pct_actual:.0f}% of {_ctx_win // 1000}K window)"
+    )
+    click.echo(f"  COST (est)         ~${assessment.estimated_cost_usd:.4f}")
     click.echo(_SEP)
+
+    # Suspect results block (dead letter quarantine report)
+    _suspect_pillars = [r for r in assessment.pillar_results if r.suspect]
+    if _suspect_pillars or assessment.suspect_warnings:
+        click.echo()
+        click.echo("  SUSPECT RESULTS  (excluded from overall score)")
+        for w in assessment.suspect_warnings:
+            click.echo(f"  ! {w}")
+        for r in _suspect_pillars:
+            click.echo(f"    {r.name:<20}  {r.suspect_reason}")
+        click.echo(_SEP)
 
     # Aggregate findings across pillars
     all_findings = []
@@ -731,7 +814,11 @@ def _pillar_table_lines(assessment: object) -> list[str]:
     rows.append(mid)
     for r in assessment.pillar_results:
         if r.name in tier1:
-            rows.append(drow(r.name, _r_score(r), _r_conf(r)))
+            from awaf.pillars.base import PillarResult as _PR2
+
+            assert isinstance(r, _PR2)
+            st = "!" if r.suspect else ""
+            rows.append(drow(r.name, _r_score(r), _r_conf(r), st))
 
     # Tier 2
     rows.append(tsep)
@@ -740,7 +827,11 @@ def _pillar_table_lines(assessment: object) -> list[str]:
     tier2 = {"Reasoning Integ.", "Controllability", "Context Integrity"}
     for r in assessment.pillar_results:
         if r.name in tier2:
-            rows.append(drow(r.name, _r_score(r), _r_conf(r), "1.5x"))
+            from awaf.pillars.base import PillarResult as _PR3
+
+            assert isinstance(r, _PR3)
+            st = "! 1.5x" if r.suspect else "1.5x"
+            rows.append(drow(r.name, _r_score(r), _r_conf(r), st))
 
     rows.append(bot)
     return rows

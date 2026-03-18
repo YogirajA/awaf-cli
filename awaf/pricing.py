@@ -16,6 +16,19 @@ PRICING: dict[str, dict[str, float]] = {
 # Conservative fallback for unknown models
 FALLBACK_PRICING: dict[str, float] = {"input": 5.00, "output": 20.00}
 
+# Context window sizes in tokens (input limit per call)
+CONTEXT_WINDOW: dict[str, int] = {
+    "claude-opus-4-5": 200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "o3": 200_000,
+    "gemini-2.0-flash": 1_048_576,
+    "gemini-1.5-pro": 1_048_576,
+}
+FALLBACK_CONTEXT_WINDOW: int = 128_000
+
 
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     """
