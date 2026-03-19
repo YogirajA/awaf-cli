@@ -427,7 +427,6 @@ AWAF_LOG_LEVEL=INFO
 | Mode | Setup | Data | Right For |
 |---|---|---|---|
 | Local | pip install awaf + API key | awaf.db on your machine | Solo developers, OSS projects |
-| Cloud | API key + AWAF_MODE=cloud | awaf.dev (coming) | Teams, dashboards, benchmarks |
 | On-Prem | Docker Compose / Helm | Your PostgreSQL | Enterprise, regulated industries |
 
 The local mode is fully functional with no account required. Cloud and on-prem add team dashboards, cross-project score history, and industry benchmarks. On-prem: no artifacts leave your network. All model API calls use your own API key. No telemetry unless opted in.
@@ -440,11 +439,7 @@ The local mode is fully functional with no account required. Cloud and on-prem a
 [![AWAF Score](https://img.shields.io/badge/AWAF%20Score-78%20Near%20Ready-2563EB?style=flat-square)](https://github.com/YogirajA/AWAF)
 ```
 
-Live badge (cloud mode):
-
-```markdown
-[![AWAF Score](https://awaf.dev/badge/your-project)](https://awaf.dev/your-project)
-```
+Update the score and label after each `awaf run` to reflect your latest result.
 
 ---
 
