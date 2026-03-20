@@ -329,18 +329,28 @@ def run(
 
         # CI: watch_paths change detection (skipped when --force)
         if not force:
-            if ci_config.change_detection and ci_config.watch_paths:
-                changed_files = _get_changed_files()
-                watched_changed = any(
-                    f.startswith(tuple(ci_config.watch_paths)) for f in changed_files
-                )
-                if not watched_changed:
-                    click.echo(
-                        f"awaf: No changes under watch_paths {ci_config.watch_paths}. Skipping. (exit 3)"
+            if ci_config.change_detection:
+                # Priority: explicit watch_paths > [files] paths > legacy agent_patterns
+                watch = ci_config.watch_paths or toml_data.get("files", {}).get("paths")
+                if watch:
+                    changed_files = _get_changed_files()
+                    watched_changed = any(f.startswith(tuple(watch)) for f in changed_files)
+                    if not watched_changed:
+                        click.echo(
+                            f"awaf: No changes under watch paths {watch}. Skipping. (exit 3)"
+                        )
+                        sys.exit(3)
+                else:
+                    # Fall back to legacy agent_patterns check
+                    toml_files = toml_data.get("files", {})
+                    agent_patterns = toml_files.get(
+                        "agent_patterns", ["agents/**", "tools/**", "pipelines/**"]
                     )
-                    sys.exit(3)
-            elif not ci_config.change_detection or not ci_config.watch_paths:
-                # Fall back to legacy agent_patterns check
+                    if not _any_agent_files_changed(agent_patterns):
+                        click.echo("No agent files changed. Skipping AWAF assessment. (exit 3)")
+                        sys.exit(3)
+            else:
+                # change_detection disabled — legacy agent_patterns fallback
                 toml_files = toml_data.get("files", {})
                 agent_patterns = toml_files.get(
                     "agent_patterns", ["agents/**", "tools/**", "pipelines/**"]
@@ -351,7 +361,8 @@ def run(
 
     import contextlib
 
-    scan_paths = list(paths) if paths else ["."]
+    _toml_paths = toml_data.get("files", {}).get("paths", [])
+    scan_paths = list(paths) if paths else (_toml_paths if _toml_paths else ["."])
     budget_usd: float | None = None
     raw_budget = os.environ.get("AWAF_SESSION_BUDGET_USD")
     if raw_budget:

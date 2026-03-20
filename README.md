@@ -195,13 +195,17 @@ regression_limit = 10
 warn_only = false
 
 [files]
+# paths: controls what gets ingested. --paths CLI flag overrides this.
+paths = ["agents", "awaf", "pipeline.py", "main.py", "models.py", "utils"]
+# agent_patterns: used ONLY for CI change detection (exit 3 when nothing relevant changed).
 agent_patterns = ["agents/**/*.py", "tools/**/*.py", "pipelines/**"]
 exclude = ["tests/**", "docs/**"]
 
 [ci]
 enabled = true
 schedule = "0 9 * * 1"        # cron (UTC): only run when this schedule fires
-change_detection = true        # skip if no files changed under watch_paths
+change_detection = true        # skip if no files changed under watched paths
+# watch_paths is optional — omit it and CI uses [files] paths above
 watch_paths = [
     "src/agents",
     "src/signals",
@@ -218,8 +222,8 @@ terminal_format = "compact"    # compact | full | json
 |---|---|---|
 | `ci.enabled` | `true` | Set `false` to disable all CI-mode checks |
 | `ci.schedule` | (none) | Cron expression (UTC). `awaf run --ci` skips if current time is outside ±5 min of a scheduled fire |
-| `ci.change_detection` | `false` | Skip when no files under `watch_paths` changed |
-| `ci.watch_paths` | `[]` | Directory prefixes to watch. Falls back to `[files].agent_patterns` when not set |
+| `ci.change_detection` | `false` | Skip when no relevant files changed |
+| `ci.watch_paths` | `[]` | Directory prefixes to watch. Falls back to `[files].paths`, then `[files].agent_patterns` when not set |
 
 ---
 
@@ -259,7 +263,7 @@ jobs:
 
 **Recommended cadence:** weekly schedule or on-demand before releases. Running on every PR makes sense only for teams actively refactoring agent architecture. For most teams, weekly is sufficient -- architecture changes slowly.
 
-If you do run on PRs, use `on: pull_request` with a `paths:` filter so only agent-relevant changes trigger it. AWAF also exits 3 automatically when no agent files changed (configurable via `agent_patterns` in `awaf.toml`).
+If you do run on PRs, use `on: pull_request` with a `paths:` filter so only agent-relevant changes trigger it. AWAF also exits 3 automatically when no relevant files changed (controlled by `[ci] watch_paths`, falling back to `[files] paths`, then `agent_patterns`).
 
 ### GitLab CI
 
