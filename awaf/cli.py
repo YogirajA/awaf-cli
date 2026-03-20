@@ -135,20 +135,34 @@ def _provider_status(
 
 
 def _load_dotenv(path: str = ".env") -> None:
-    """Load KEY=value pairs from .env into os.environ (does not overwrite existing vars)."""
+    """Load KEY=value pairs from .env into os.environ (does not overwrite existing vars).
+
+    Handles: quoted values, inline comments, export prefix, CRLF line endings.
+    """
     if not os.path.exists(path):
         return
-    with open(path) as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            if "=" in line:
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
+            # Strip optional 'export ' prefix
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            # Strip inline comments outside quotes
+            value = value.strip()
+            if value and value[0] in ('"', "'"):
+                quote = value[0]
+                end = value.find(quote, 1)
+                value = value[1:end] if end != -1 else value[1:]
+            else:
+                value = value.split("#")[0].strip()
+            if key and key not in os.environ:
+                os.environ[key] = value
 
 
 @click.group()
