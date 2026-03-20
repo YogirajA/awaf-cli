@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "awaf"
-version = "0.3.1"
+version = "0.3.2"
 description = "Score AI agent architectures against the AWAF open specification"
 readme = "README.md"
 license = {text = "Apache-2.0"}
