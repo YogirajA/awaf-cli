@@ -527,24 +527,40 @@ If a provider's SDK is not installed and the user attempts to use it, raise `Pro
 The `[ci]` section in `awaf.toml` controls when awaf evaluates in CI pipelines.
 
 ```toml
+[files]
+# paths: ingestion scope. --paths CLI flag overrides. Falls back to ["."] if unset.
+paths = ["agents", "awaf", "pipeline.py", "main.py", "models.py", "utils"]
+# agent_patterns: CI change detection only (not used for ingestion).
+agent_patterns = ["agents/**/*.py", "tools/**/*.py"]
+exclude = ["tests/**", "docs/**"]
+
 [ci]
 enabled = true
 schedule = "0 9 * * 1"    # cron expression (UTC); skip if current time doesn't match
 change_detection = true
+# watch_paths is optional — omit to fall back to [files].paths
 watch_paths = [
     "src/agents",
     "src/signals",
 ]
 ```
 
-**Fields:**
+**`[files]` fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `paths` | list[str] | `["."]` | Directories and files to ingest. Overridden by `--paths` CLI flag. Also used as the CI watch scope when `[ci].watch_paths` is not set. |
+| `agent_patterns` | list[str] | `["agents/**", "tools/**", "pipelines/**"]` | Glob patterns for CI change detection only. Not used for ingestion. |
+| `exclude` | list[str] | `[]` | Patterns to exclude from the directory walk. |
+
+**`[ci]` fields:**
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | `true` | Set `false` to disable all CI checks |
 | `schedule` | string | `null` | Cron expression (UTC). If set, `awaf run --ci` skips unless current UTC time is within ±5 min of a scheduled fire. Requires `croniter` (included in base deps). |
-| `change_detection` | bool | `false` | If `true`, skip when no files under `watch_paths` changed |
-| `watch_paths` | list[str] | `[]` | Directory prefixes to watch (e.g. `"src/agents"`). Any changed file whose path starts with a prefix triggers a run. Falls back to `[files].agent_patterns` when not set. |
+| `change_detection` | bool | `false` | If `true`, skip when no relevant files changed |
+| `watch_paths` | list[str] | `[]` | Directory prefixes to watch. Falls back to `[files].paths`, then `[files].agent_patterns` when not set. |
 
 **Exit codes in CI mode:**
 
