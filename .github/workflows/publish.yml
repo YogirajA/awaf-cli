@@ -40,6 +40,7 @@ jobs:
     name: Build and publish
     runs-on: ubuntu-latest
     needs: ci          # never publishes if ci job fails
+    if: github.event.base_ref == 'refs/heads/main'
     environment: pypi
     permissions:
       id-token: write  # required for trusted publishing
