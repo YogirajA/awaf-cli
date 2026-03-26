@@ -80,15 +80,20 @@ def validate_assessment_cluster(results: list[PillarResult]) -> list[str]:
     score_counts: Counter[int] = Counter(int(r.score) for r in scored)
     for score_val, count in score_counts.items():
         if count >= _CLUSTER_MIN_COUNT:
-            msg = (
-                f"{count} pillars returned score {score_val} — possible model anchoring or guessing"
-            )
+            if score_val == 100:
+                msg = (
+                    f"{count} pillars returned score 100 — score 100 is difficult to achieve "
+                    "consistently; confirm by averaging multiple runs and checking std deviation "
+                    "before treating as reliable (model does not anchor on 100, but single-run "
+                    "perfect scores are high-variance)"
+                )
+                cluster_reason = f"score 100 on {count} pillars — verify with multi-run average"
+            else:
+                msg = f"{count} pillars returned score {score_val} — possible model anchoring or guessing"
+                cluster_reason = f"score {score_val} shared by {count} pillars (cluster pattern)"
             warnings.append(msg)
             for r in scored:
                 if int(r.score) == score_val:
-                    cluster_reason = (
-                        f"score {score_val} shared by {count} pillars (cluster pattern)"
-                    )
                     if not r.suspect:
                         r.suspect = True
                         r.suspect_reason = cluster_reason
