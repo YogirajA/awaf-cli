@@ -5,7 +5,9 @@ Domain boundary: This agent owns everything from file ingestion to summary outpu
 It has no runtime dependency on any other agent or orchestrator.
 """
 
+import argparse
 import hashlib
+import json
 import logging
 import os
 import re
@@ -31,6 +33,7 @@ class TrustTier(Enum):
 # Kill switch — set by SIGINT/SIGTERM; checked before every LLM call
 # ---------------------------------------------------------------------------
 _KILL_SWITCH = False
+_PAUSED = False
 
 
 def _handle_signal(signum, frame):
@@ -39,8 +42,18 @@ def _handle_signal(signum, frame):
     _KILL_SWITCH = True
 
 
+def _handle_pause(signum, frame):
+    global _PAUSED
+    _PAUSED = not _PAUSED
+    state = "paused" if _PAUSED else "resumed"
+    logging.info(f"Agent {state} (send SIGUSR1 again to toggle).")
+
+
 signal.signal(signal.SIGINT, _handle_signal)
 signal.signal(signal.SIGTERM, _handle_signal)
+# SIGUSR1: pause/resume between files without terminating the process (POSIX only)
+if hasattr(signal, "SIGUSR1"):
+    signal.signal(signal.SIGUSR1, _handle_pause)
 
 # ---------------------------------------------------------------------------
 # Session ID — propagated through all log lines for production tracing
@@ -67,9 +80,11 @@ _session_tokens_used = 0
 _budget_alert_fired = False
 
 # ---------------------------------------------------------------------------
-# Max file size to ingest (blast radius bound: no multi-GB reads)
+# Scope controls — all runtime-configurable via env vars; no redeployment needed
 # ---------------------------------------------------------------------------
-MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MB
+MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(1 * 1024 * 1024)))  # default 1 MB
+MAX_CALLS_PER_HASH = int(os.environ.get("MAX_CALLS_PER_HASH", "2"))
+MODEL_COMPLEXITY_THRESHOLD = int(os.environ.get("MODEL_COMPLEXITY_THRESHOLD", "2000"))
 
 # ---------------------------------------------------------------------------
 # Cache: sha256(content) → {summary, model, timestamp, trace_id, mtime}
@@ -81,7 +96,6 @@ _cache: dict[str, dict] = {}
 # Loop detection: track LLM call count per content hash in this session
 # ---------------------------------------------------------------------------
 _call_count: dict[str, int] = {}
-MAX_CALLS_PER_HASH = 2  # guard against retry storms on the same content
 
 # Prompt injection patterns to detect before content enters context
 _INJECTION_RE = re.compile(
@@ -120,8 +134,11 @@ def validate_path(file_path: str, tier: TrustTier = TrustTier.UNTRUSTED) -> str:
 
 
 def select_model(text: str) -> str:
-    """Right-size model: haiku for short inputs, sonnet for long ones."""
-    if len(text) < 2_000:
+    """Right-size model: haiku for short inputs, sonnet for long ones.
+
+    Threshold is runtime-configurable via MODEL_COMPLEXITY_THRESHOLD env var.
+    """
+    if len(text) < MODEL_COMPLEXITY_THRESHOLD:
         return "claude-haiku-4-5-20251001"
     return "claude-sonnet-4-6"
 
@@ -241,24 +258,82 @@ def summarize(file_path: str, client: anthropic.Anthropic) -> str:
     return summary
 
 
+# ---------------------------------------------------------------------------
+# Checkpoint: persist completed file paths so batch runs can resume after failure
+# ---------------------------------------------------------------------------
+CHECKPOINT_FILE = ".summarizer_checkpoint.jsonl"
+
+
+def _load_checkpoint() -> set[str]:
+    """Return the set of file paths already completed in a previous run."""
+    if not os.path.exists(CHECKPOINT_FILE):
+        return set()
+    completed: set[str] = set()
+    with open(CHECKPOINT_FILE) as _f:
+        for line in _f:
+            line = line.strip()
+            if line:
+                completed.add(json.loads(line)["path"])
+    return completed
+
+
+def _save_checkpoint(path: str) -> None:
+    """Append a completed file path to the checkpoint log."""
+    with open(CHECKPOINT_FILE, "a") as _f:
+        json.dump({"path": path, "timestamp": time.time()}, _f)
+        _f.write("\n")
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python agent.py <file> [file ...]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="File Summarizer Agent")
+    parser.add_argument("files", nargs="+", help="Files to summarize")
+    parser.add_argument(
+        "--require-approval",
+        action="store_true",
+        help="Prompt for human confirmation before processing begins (approval gate)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from checkpoint; skip already-completed files",
+    )
+    args = parser.parse_args()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("Error: ANTHROPIC_API_KEY environment variable not set.", file=sys.stderr)
         sys.exit(1)
 
+    # Controllability: load checkpoint to determine pending work
+    completed = _load_checkpoint() if args.resume else set()
+    pending = [f for f in args.files if f not in completed]
+    if not pending:
+        print("All files already completed. Nothing to do.")
+        return
+
+    # Controllability: approval gate before any irreversible action (LLM calls / file I/O)
+    if args.require_approval:
+        print(f"\nAbout to process {len(pending)} file(s):")
+        for f in pending:
+            print(f"  {f}")
+        confirm = input("\nProceed? [y/N] ").strip().lower()
+        if confirm != "y":
+            print("Aborted by operator.", file=sys.stderr)
+            sys.exit(0)
+
     client = anthropic.Anthropic(api_key=api_key)
     logging.info(f"Agent started session_id={SESSION_ID} budget={SESSION_TOKEN_LIMIT}")
 
     summaries: dict[str, str] = {}
-    for path in sys.argv[1:]:
+    for path in pending:
+        # Controllability: pause between files when SIGUSR1 has been received
+        while _PAUSED:
+            time.sleep(0.2)
+
         try:
             summary = summarize(path, client)
             summaries[path] = summary
+            _save_checkpoint(path)
             print(f"\n=== {path} ===\n{summary}")
         except (RuntimeError, PermissionError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
@@ -267,6 +342,10 @@ def main():
     # Context Integrity: detect contradictory facts across files in this session.
     # Flags when the same capitalized term appears in mutually exclusive contexts.
     _check_cross_file_contradictions(summaries)
+
+    # Clean up checkpoint on successful completion
+    if os.path.exists(CHECKPOINT_FILE):
+        os.remove(CHECKPOINT_FILE)
 
     print(f"\n[Session total tokens used: {_session_tokens_used} / {SESSION_TOKEN_LIMIT}]")
 
