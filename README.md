@@ -502,7 +502,21 @@ Multiple pillars score the same value (e.g., six pillars all at 42), or a pillar
 
 **Cause: model behavior (score clustering)**
 
-All pillar evaluations run at `temperature=0.0` (deterministic). However, smaller models like `claude-haiku-4-5-20251001` anchor to a specific score — typically in the 40–45 range — when evidence is present but incomplete (`partial` confidence). This is the model's calibrated "partial credit" score, not a bug. Running the same codebase twice will produce the same score; it looks suspicious in a table but is consistent.
+All pillar evaluations run at `temperature=0.0`, which maximizes consistency but does not guarantee identical outputs — LLM providers may route requests across different hardware or model versions between runs. Scores are **mostly deterministic**: repeated runs on the same artifacts typically agree within ±3 points, but a single run is not a reliable point estimate.
+
+**Before treating a score as ground truth, sample at least 5–10 runs and record the mean and standard deviation.** A score of 72 ± 2 is a stable reading; a score of 72 ± 15 is noise. The history command makes this easy:
+
+```bash
+# Run 5 times, then check history to see variance
+for i in {1..5}; do awaf run; done
+awaf history
+```
+
+Different models anchor at different values when evidence is incomplete (`partial` confidence):
+- `claude-haiku-4-5-20251001`: clusters near 42
+- `claude-sonnet-4-6`: clusters near 72
+
+These are the models' holistic "partial credit" estimates, not computed scores. awaf v0.3.0+ addresses this with a mandatory tally field that forces mechanical per-criterion computation (see Dead letter detection below).
 
 **Cause: cross-pillar impression bleed**
 
