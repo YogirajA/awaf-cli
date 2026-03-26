@@ -578,7 +578,7 @@ def run(
     _suspect_pillars = [r for r in assessment.pillar_results if r.suspect]
     if _suspect_pillars or assessment.suspect_warnings:
         click.echo()
-        click.echo("  SUSPECT RESULTS  (excluded from overall score)")
+        click.echo("  SUSPECT RESULTS  (included in score — flagged for operator review)")
         for w in assessment.suspect_warnings:
             click.echo(f"  ! {w}")
         for r in _suspect_pillars:
