@@ -80,11 +80,12 @@ def compute_overall_score(results: list[PillarResult]) -> float:
       overall = sum(score * weight) / sum(weights)
       Tier 2 pillars: 1.5x weight. All others: 1.0x.
     Skipped and not-applicable pillars are excluded from both numerator and denominator.
+    Suspect pillars are included — suspect is a warning flag, not a disqualification.
     """
     total_weight = 0.0
     weighted_sum = 0.0
     for r in results:
-        if r.skipped or r.not_applicable or r.suspect:
+        if r.skipped or r.not_applicable:
             continue
         weight = 1.5 if r.name in _TIER2 else 1.0
         weighted_sum += r.score * weight

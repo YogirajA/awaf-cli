@@ -13,8 +13,10 @@ import os
 import re
 import signal
 import sys
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 
 import anthropic
@@ -87,6 +89,23 @@ MAX_CALLS_PER_HASH = int(os.environ.get("MAX_CALLS_PER_HASH", "2"))
 MODEL_COMPLEXITY_THRESHOLD = int(os.environ.get("MODEL_COMPLEXITY_THRESHOLD", "2000"))
 
 # ---------------------------------------------------------------------------
+# File I/O timeout — protects against indefinite hangs on network-mounted filesystems
+# ---------------------------------------------------------------------------
+FILE_IO_TIMEOUT_SECONDS = float(os.environ.get("FILE_IO_TIMEOUT_SECONDS", "5.0"))
+
+# ---------------------------------------------------------------------------
+# Circuit breaker — session-level; trips after N consecutive API failures,
+# preventing wasted retries against a known-degraded endpoint
+# ---------------------------------------------------------------------------
+_consecutive_api_failures = 0
+CIRCUIT_BREAKER_THRESHOLD = int(os.environ.get("CIRCUIT_BREAKER_THRESHOLD", "3"))
+
+# ---------------------------------------------------------------------------
+# Session lock — protects shared mutable state during parallel batch processing
+# ---------------------------------------------------------------------------
+_SESSION_LOCK = threading.Lock()
+
+# ---------------------------------------------------------------------------
 # Cache: sha256(content) → {summary, model, timestamp, trace_id, mtime}
 # Provenance metadata stored with every entry for auditability.
 # ---------------------------------------------------------------------------
@@ -133,6 +152,44 @@ def validate_path(file_path: str, tier: TrustTier = TrustTier.UNTRUSTED) -> str:
     return resolved  # now VALIDATED
 
 
+def _read_file_with_timeout(path: str) -> str:
+    """Read file content with a hard timeout.
+
+    Prevents indefinite hangs on network-mounted filesystems (NFS, CIFS).
+    FILE_IO_TIMEOUT_SECONDS is env-configurable (default 5 s).
+    Uses a daemon thread so the timeout is enforced cross-platform.
+    """
+    result: list[str | None] = [None]
+    error: list[BaseException | None] = [None]
+
+    def _do_read() -> None:
+        try:
+            with open(path) as _f:
+                result[0] = _f.read()
+        except Exception as exc:  # noqa: BLE001
+            error[0] = exc
+
+    thread = threading.Thread(target=_do_read, daemon=True)
+    thread.start()
+    thread.join(timeout=FILE_IO_TIMEOUT_SECONDS)
+    if thread.is_alive():
+        raise TimeoutError(f"File read timed out after {FILE_IO_TIMEOUT_SECONDS}s: '{path}'")
+    if error[0] is not None:
+        raise error[0]
+    return result[0]  # type: ignore[return-value]
+
+
+def _extractive_fallback(content: str) -> str:
+    """Return the first 3 sentences as a degraded summary when the LLM is unavailable.
+
+    This is a defined fallback strategy — the agent degrades gracefully rather than
+    aborting the entire batch when a single file's LLM call fails permanently.
+    """
+    sentences = re.split(r"(?<=[.!?])\s+", content.strip())
+    excerpt = " ".join(sentences[:3]) if sentences else content[:300]
+    return f"[DEGRADED SUMMARY — LLM unavailable, extractive fallback]\n{excerpt}"
+
+
 def select_model(text: str) -> str:
     """Right-size model: haiku for short inputs, sonnet for long ones.
 
@@ -144,7 +201,7 @@ def select_model(text: str) -> str:
 
 
 def summarize(file_path: str, client: anthropic.Anthropic) -> str:
-    global _session_tokens_used, _budget_alert_fired
+    global _session_tokens_used, _budget_alert_fired, _consecutive_api_failures
 
     if _KILL_SWITCH:
         raise RuntimeError("Kill switch active — aborting.")
@@ -158,8 +215,8 @@ def summarize(file_path: str, client: anthropic.Anthropic) -> str:
         raise ValueError(f"File '{file_path}' exceeds {MAX_FILE_BYTES} bytes limit.")
 
     file_mtime = os.path.getmtime(safe_path)
-    with open(safe_path) as _f:
-        raw = _f.read()
+    # File I/O with timeout: prevents indefinite hang on network-mounted filesystems
+    raw = _read_file_with_timeout(safe_path)
     content = sanitize_input(raw, tier=TrustTier.UNTRUSTED)
     content_hash = hashlib.sha256(content.encode()).hexdigest()
 
@@ -169,16 +226,18 @@ def summarize(file_path: str, client: anthropic.Anthropic) -> str:
         logging.info(f"Cache hit for {file_path} (model={cached['model']})")
         return cached["summary"]
 
-    # Cost: enforce session budget before calling
-    if _session_tokens_used >= SESSION_TOKEN_LIMIT:
-        raise RuntimeError(f"Session budget exhausted ({SESSION_TOKEN_LIMIT} tokens). Aborting.")
-
-    # Cost: loop detection — prevent repeated LLM calls on the same content
-    _call_count[content_hash] = _call_count.get(content_hash, 0) + 1
-    if _call_count[content_hash] > MAX_CALLS_PER_HASH:
-        raise RuntimeError(
-            f"Loop detected: content hash called {_call_count[content_hash]}× in this session."
-        )
+    # Cost: enforce session budget + loop detection — both read/write shared state; lock required
+    # for thread safety when --parallel is used.
+    with _SESSION_LOCK:
+        if _session_tokens_used >= SESSION_TOKEN_LIMIT:
+            raise RuntimeError(
+                f"Session budget exhausted ({SESSION_TOKEN_LIMIT} tokens). Aborting."
+            )
+        _call_count[content_hash] = _call_count.get(content_hash, 0) + 1
+        if _call_count[content_hash] > MAX_CALLS_PER_HASH:
+            raise RuntimeError(
+                f"Loop detected: content hash called {_call_count[content_hash]}× in this session."
+            )
 
     model = select_model(content)
     trace_id = str(uuid.uuid4())
@@ -209,25 +268,46 @@ def summarize(file_path: str, client: anthropic.Anthropic) -> str:
             logging.warning(f"Attempt {attempt + 1} failed: {exc} — retrying in {wait}s")
             time.sleep(wait)
     else:
-        # Reliability: fail loudly, never swallow errors silently
-        raise RuntimeError(f"All 3 attempts failed. Last error: {last_error}") from last_error
+        # Circuit breaker: count consecutive failures across the session.
+        # After CIRCUIT_BREAKER_THRESHOLD failures, trip the breaker and abort the session
+        # rather than retrying every remaining file against a known-degraded endpoint.
+        # On sub-threshold failures, return a degraded extractive summary and continue.
+        with _SESSION_LOCK:
+            _consecutive_api_failures += 1
+            breaker_count = _consecutive_api_failures
+        if breaker_count >= CIRCUIT_BREAKER_THRESHOLD:
+            raise RuntimeError(
+                f"Circuit breaker open: {breaker_count} consecutive API failures — "
+                "aborting session to avoid further waste against a degraded endpoint."
+            )
+        logging.warning(
+            f"All 3 LLM attempts failed for {file_path!r} "
+            f"(failure {breaker_count}/{CIRCUIT_BREAKER_THRESHOLD}) — "
+            f"returning extractive fallback. Last error: {last_error}"
+        )
+        return _extractive_fallback(content)
+
+    # Reset circuit breaker on any successful LLM call
+    with _SESSION_LOCK:
+        _consecutive_api_failures = 0
 
     latency_ms = int((time.perf_counter() - t_start) * 1000)
     tokens_used = response.usage.input_tokens + response.usage.output_tokens
-    _session_tokens_used += tokens_used
+
+    with _SESSION_LOCK:
+        _session_tokens_used += tokens_used
+        current_total = _session_tokens_used
+        if not _budget_alert_fired and current_total >= BUDGET_WARN_THRESHOLD:
+            logging.warning(
+                f"BUDGET_ALERT: session tokens {current_total} >= "
+                f"80% of limit ({BUDGET_WARN_THRESHOLD}). Approaching hard stop."
+            )
+            _budget_alert_fired = True
 
     logging.info(
-        f"tokens={tokens_used} session_total={_session_tokens_used} "
+        f"tokens={tokens_used} session_total={current_total} "
         f"latency_ms={latency_ms} trace_id={trace_id}"
     )
-
-    # Cost: alert when approaching 80% of budget (fires once per session)
-    if not _budget_alert_fired and _session_tokens_used >= BUDGET_WARN_THRESHOLD:
-        logging.warning(
-            f"BUDGET_ALERT: session tokens {_session_tokens_used} >= "
-            f"80% of limit ({BUDGET_WARN_THRESHOLD}). Approaching hard stop."
-        )
-        _budget_alert_fired = True
 
     # Performance: alert if latency exceeds SLO p95 target (8 s)
     if latency_ms > 8_000:
@@ -235,27 +315,102 @@ def summarize(file_path: str, client: anthropic.Anthropic) -> str:
 
     summary = response.content[0].text
 
-    # Reasoning integrity: flag hedged outputs so callers know to verify
-    hedge_words = ("i think", "i believe", "not sure", "uncertain", "might be")
+    # Reasoning integrity: flag hedged outputs so callers know to verify.
+    # Covers both explicit hedges ("i think") and epistemic qualifiers ("approximately").
+    hedge_words = (
+        "i think",
+        "i believe",
+        "not sure",
+        "uncertain",
+        "might be",
+        "approximately",
+        "roughly",
+        "estimated",
+        "unclear",
+        "possibly",
+        "perhaps",
+        "may be",
+        "could be",
+        "seems to",
+        "appears to",
+        "likely",
+        "probably",
+        "it's possible",
+        "cannot determine",
+        "cannot confirm",
+        "it is unclear",
+    )
     uncertain = any(w in summary.lower() for w in hedge_words)
     if uncertain:
         summary += "\n\n[Note: model expressed uncertainty — please verify before relying on this.]"
 
     # Provenance: store model, timestamp, trace_id, and the full prompt snapshot
     # alongside every cached summary for auditability and reasoning trace.
-    _cache[content_hash] = {
-        "summary": summary,
-        "model": model,
-        "timestamp": time.time(),
-        "trace_id": trace_id,
-        "mtime": file_mtime,
-        "uncertain": uncertain,
-        # Reasoning trace: captures what the model was asked so output can be audited
-        "prompt_snapshot": f"Summarize this:\n\n{content[:500]}…",  # truncated for storage
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
-    }
+    # Lock required: parallel workers may write to _cache concurrently.
+    with _SESSION_LOCK:
+        _cache[content_hash] = {
+            "summary": summary,
+            "model": model,
+            "timestamp": time.time(),
+            "trace_id": trace_id,
+            "mtime": file_mtime,
+            "uncertain": uncertain,
+            # Reasoning trace: full prompt stored — no truncation — for complete auditability.
+            "prompt_snapshot": f"Summarize this:\n\n{content}",
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        }
+
+    # Reasoning integrity: persist full trace to durable storage so it survives restarts.
+    # In-memory cache alone is not sufficient — restarts lose all reasoning history.
+    _write_audit_log(
+        trace_id=trace_id,
+        model=model,
+        file_path=file_path,
+        prompt=f"Summarize this:\n\n{content}",
+        response=summary,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+        uncertain=uncertain,
+    )
+
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Audit log: persist full reasoning trace to durable storage on every LLM call.
+# In-memory cache (_cache) is lost on restart; this file survives.
+# ---------------------------------------------------------------------------
+AUDIT_LOG_FILE = ".reasoning_audit.jsonl"
+
+
+def _write_audit_log(
+    *,
+    trace_id: str,
+    model: str,
+    file_path: str,
+    prompt: str,
+    response: str,
+    input_tokens: int,
+    output_tokens: int,
+    uncertain: bool,
+) -> None:
+    """Append one reasoning trace entry to the audit log (newline-delimited JSON)."""
+    entry = {
+        "session_id": SESSION_ID,
+        "trace_id": trace_id,
+        "model": model,
+        "file_path": file_path,
+        "prompt": prompt,
+        "response": response,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "uncertain": uncertain,
+        "timestamp": time.time(),
+    }
+    with open(AUDIT_LOG_FILE, "a") as _f:
+        json.dump(entry, _f)
+        _f.write("\n")
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +452,14 @@ def main():
         action="store_true",
         help="Resume from checkpoint; skip already-completed files",
     )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help=(
+            "Process files concurrently with ThreadPoolExecutor "
+            "(env: BATCH_CONCURRENCY=N, default 5)"
+        ),
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -325,19 +488,40 @@ def main():
     logging.info(f"Agent started session_id={SESSION_ID} budget={SESSION_TOKEN_LIMIT}")
 
     summaries: dict[str, str] = {}
-    for path in pending:
-        # Controllability: pause between files when SIGUSR1 has been received
-        while _PAUSED:
-            time.sleep(0.2)
 
-        try:
-            summary = summarize(path, client)
-            summaries[path] = summary
-            _save_checkpoint(path)
-            print(f"\n=== {path} ===\n{summary}")
-        except (RuntimeError, PermissionError, ValueError) as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
+    if args.parallel:
+        # Performance: process independent files concurrently to reduce batch latency.
+        # _SESSION_LOCK protects all shared mutable state (tokens, cache, call_count).
+        max_workers = int(os.environ.get("BATCH_CONCURRENCY", "5"))
+        logging.info(f"Parallel mode: max_workers={max_workers}")
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_to_path = {pool.submit(summarize, path, client): path for path in pending}
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                while _PAUSED:
+                    time.sleep(0.2)
+                try:
+                    summary = future.result()
+                    summaries[path] = summary
+                    _save_checkpoint(path)
+                    print(f"\n=== {path} ===\n{summary}")
+                except (RuntimeError, PermissionError, ValueError, TimeoutError) as exc:
+                    print(f"ERROR: {exc}", file=sys.stderr)
+                    sys.exit(1)
+    else:
+        for path in pending:
+            # Controllability: pause between files when SIGUSR1 has been received
+            while _PAUSED:
+                time.sleep(0.2)
+
+            try:
+                summary = summarize(path, client)
+                summaries[path] = summary
+                _save_checkpoint(path)
+                print(f"\n=== {path} ===\n{summary}")
+            except (RuntimeError, PermissionError, ValueError, TimeoutError) as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                sys.exit(1)
 
     # Context Integrity: detect contradictory facts across files in this session.
     # Flags when the same capitalized term appears in mutually exclusive contexts.
