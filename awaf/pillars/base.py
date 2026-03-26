@@ -73,12 +73,18 @@ pillar's score or confidence level.
 - If this pillar's criteria fundamentally do not apply to the agent's architecture (e.g., Reasoning
   Integrity for an agent that intentionally uses no tool/function calling), set not_applicable: true
   and explain why in na_reason. Do NOT score 0 for absent patterns that are intentionally absent.
+- TALLY REQUIRED: For each criterion in '## What to Assess', assign a risk label [H=3 pts], \
+[M=2 pts], or [L=1 pt] using the definitions above, mark it pass or fail with a one-line \
+evidence citation, then compute: score = round(sum_passed_pts / sum_all_pts × 100). \
+Place this breakdown in the "tally" field. The score field MUST equal the computed value. \
+Do NOT adjust the score holistically after computing the tally.
 """
 
 _JSON_SCHEMA = """\
 Return ONLY valid JSON (no markdown fences, no commentary before or after) with this exact structure:
 {
-  "score": <integer 0-100>,
+  "tally": "<criterion-by-criterion breakdown: '[H] owns domain end-to-end: PASS (3 pts) — tool list in agent.py line 12'; sum at end: '11/14 pts = 79%'>",
+  "score": <integer 0-100, must equal round(passed_pts / total_pts * 100) from tally>,
   "confidence": "<verified|partial|self_reported>",
   "findings": [
     {"severity": "<Critical|High|Medium>", "detail": "<specific finding with evidence citation>"}

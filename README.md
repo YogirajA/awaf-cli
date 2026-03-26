@@ -229,6 +229,31 @@ terminal_format = "compact"    # compact | full | json
 
 ## CI Integration
 
+### What CI gates are valid — and which ones are not
+
+LLM assessments are non-deterministic even at `temperature=0.0`. Repeated runs on identical artifacts typically agree within **±3–5 points**, but a single run is not a reliable point estimate. This has direct consequences for how you configure thresholds:
+
+| Gate type | Valid? | Why |
+|-----------|--------|-----|
+| **Regression detection** (`score-regression-limit`) | ✅ Always | A real architectural regression is large (10–20+ pts). ±5 noise does not cross a 10-point limit. This is the safest gate for any team. |
+| **Foundation hard fail** (Foundation < 40) | ✅ Always | Threshold is large enough that noise cannot cause false failures. |
+| **Exit 3 when nothing changed** | ✅ Always | Binary file diff — no LLM involved. |
+| **Absolute threshold** (`fail-threshold`) | ⚠️ Only after baseline | If your stable score is 88 ± 6, a gate at 90 will fail randomly. Establish mean ± σ first (see below). |
+| **Per-pillar gates** | ❌ No | Individual pillar variance is higher than overall variance. A 5-point per-pillar swing after an unrelated change is normal. |
+
+**Before setting `fail-threshold`, establish a baseline:**
+
+```bash
+# Run 5–10 times on the same codebase, then inspect variance
+for i in {1..5}; do awaf run; done
+awaf history
+
+# mean=88, σ=2  → threshold of 85 is a reliable gate
+# mean=88, σ=12 → no absolute threshold is reliable; use score-regression-limit only
+```
+
+If σ > 5, switch to a stronger model (`--model claude-sonnet-4-6`) — it shows significantly less variance than Haiku — or drop the absolute threshold and use regression detection only.
+
 ### GitHub Actions
 
 ```yaml
@@ -255,9 +280,14 @@ jobs:
           provider: anthropic           # anthropic | openai | azure | google | litellm
           model: claude-haiku-4-5-20251001  # optional; omit to use provider default (Haiku)
           project-name: my-agent
+          # score-regression-limit: safe to use immediately — catches real regressions
+          # regardless of run-to-run variance.
+          score-regression-limit: 10
+          # fail-threshold: only set this after running 5–10 baselines and confirming
+          # your σ < 5. Set the threshold at least 2σ below your mean.
+          # If unsure, omit it and rely on score-regression-limit alone.
           fail-threshold: 60
           tier2-fail-threshold: 50
-          score-regression-limit: 10
           post-pr-comment: true
 ```
 
@@ -502,7 +532,21 @@ Multiple pillars score the same value (e.g., six pillars all at 42), or a pillar
 
 **Cause: model behavior (score clustering)**
 
-All pillar evaluations run at `temperature=0.0` (deterministic). However, smaller models like `claude-haiku-4-5-20251001` anchor to a specific score — typically in the 40–45 range — when evidence is present but incomplete (`partial` confidence). This is the model's calibrated "partial credit" score, not a bug. Running the same codebase twice will produce the same score; it looks suspicious in a table but is consistent.
+All pillar evaluations run at `temperature=0.0`, which maximizes consistency but does not guarantee identical outputs — LLM providers may route requests across different hardware or model versions between runs. Scores are **mostly deterministic**: repeated runs on the same artifacts typically agree within ±3 points, but a single run is not a reliable point estimate.
+
+**Before treating a score as ground truth, sample at least 5–10 runs and record the mean and standard deviation.** A score of 72 ± 2 is a stable reading; a score of 72 ± 15 is noise. The history command makes this easy:
+
+```bash
+# Run 5 times, then check history to see variance
+for i in {1..5}; do awaf run; done
+awaf history
+```
+
+Different models anchor at different values when evidence is incomplete (`partial` confidence):
+- `claude-haiku-4-5-20251001`: clusters near 42
+- `claude-sonnet-4-6`: clusters near 72
+
+These are the models' holistic "partial credit" estimates, not computed scores. awaf v0.3.0+ addresses this with a mandatory tally field that forces mechanical per-criterion computation (see Dead letter detection below).
 
 **Cause: cross-pillar impression bleed**
 
@@ -510,13 +554,13 @@ Every pillar receives the full artifact. If you add evidence that belongs to a d
 
 **Dead letter detection (v0.3.0+)**
 
-awaf-cli automatically detects and quarantines suspect results before they reach the overall score:
+awaf-cli automatically detects suspect results and surfaces them for operator review:
 
-- **Known pathology scores** (e.g., Haiku anchoring at 42) are flagged and excluded.
-- **Output truncation**: if a pillar's response was cut off mid-stream (output tokens near the provider's `max_tokens` limit), the result is quarantined rather than silently scored as 0.
+- **Known pathology scores** (e.g., Haiku anchoring at 42) are flagged.
+- **Output truncation**: if a pillar's response was cut off mid-stream (output tokens near the provider's `max_tokens` limit), the result is flagged rather than silently scored as 0.
 - **Score clustering**: if 3 or more pillars return the same integer score, the cluster is flagged as possible model anchoring.
 
-Suspect pillars are shown in a `SUSPECT RESULTS` block in the output and marked with `!` in the pillar table. They are excluded from the overall score calculation. The run still completes; only the contaminated pillars are removed.
+Suspect pillars are shown in a `SUSPECT RESULTS` block in the output and marked with `!` in the pillar table. They are **included in the overall score** — suspect is a warning for operators to review, not a veto that silently drops pillars from the denominator. The run still completes; suspect results are visible so you can decide whether to re-run with a stronger model or accept the result.
 
 **What to do**
 
