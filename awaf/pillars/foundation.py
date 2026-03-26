@@ -8,6 +8,7 @@ _WHAT = """\
 - Is the blast radius of a failure contained to this agent's slice?
 - Are inter-agent communications deliberate and minimal rather than structural coupling?
 - Is the slice boundary documented and enforced?
+- Are tools single-purpose with explicitly described capabilities, and are inter-agent data contracts typed rather than free-form text?
 
 IMPORTANT — Foundation Fail: A score below 40 is a Foundation Fail. Note this explicitly
 in your findings. An agent that cannot function independently has a structural problem that
