@@ -5,12 +5,14 @@ from awaf.pillars.base import PillarAgent
 _WHAT = """\
 Stale context is corrupted reasoning. This pillar has no cloud equivalent.
 
-- Is context actively managed across long sessions (stale data evicted, not just accumulated)?
+- Is context actively managed across long sessions (stale data evicted, stale tool results pruned on resume, current state re-fetched rather than replayed)?
 - Is external content sanitized before entering agent context?
 - Does the agent distinguish between what it knows and what it inferred?
 - Is there a mechanism to detect stale or contradictory context?
 - Are the limits of what the agent knows surfaced explicitly?
 - Is context window usage tracked?
+- Is agent state explicitly persisted during long sessions (scratchpad, memory store, or equivalent), not just accumulated in context?
+- Are tool response outputs filtered to relevant fields before re-entering context (not just input context pruned)?
 """
 
 _EVIDENCE = """\
