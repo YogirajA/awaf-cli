@@ -27,6 +27,7 @@ dependencies = [
     "click>=8.1.0",
     "croniter>=6.2.2",
     "json-repair>=0.58.6",
+    "plotext>=5.3.2",
     "sqlalchemy>=2.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
@@ -50,6 +51,9 @@ all-providers = [
     "tiktoken>=0.7.0",
     "google-genai>=0.3.0",
     "litellm>=1.50.0",
+]
+variance = [
+    "matplotlib>=3.10.8",
 ]
 
 [project.scripts]
