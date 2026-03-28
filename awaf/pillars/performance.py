@@ -7,6 +7,7 @@ _WHAT = """\
   model for simple tasks)?
 - Is context pruned to remove stale or irrelevant content before each call?
 - Are independent subtasks parallelized?
+- Are tool calls and LLM API calls batched where possible to reduce per-call overhead and latency?
 - Are results cached to avoid redundant LLM calls?
 - Is there latency measurement and a defined latency SLO?
 """

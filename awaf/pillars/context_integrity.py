@@ -11,6 +11,8 @@ Stale context is corrupted reasoning. This pillar has no cloud equivalent.
 - Is there a mechanism to detect stale or contradictory context?
 - Are the limits of what the agent knows surfaced explicitly?
 - Is context window usage tracked?
+- Is context size actively bounded during long sessions? Does the agent prune, summarize, or
+  offload context before approaching window limits, rather than silently degrading as the window fills?
 - Is agent state explicitly persisted during long sessions (scratchpad, memory store, or equivalent), not just accumulated in context?
 - Are tool response outputs filtered to relevant fields before re-entering context (not just input context pruned)?
 """

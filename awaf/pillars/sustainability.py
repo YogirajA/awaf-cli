@@ -6,7 +6,7 @@ _WHAT = """\
 - Are models right-sized for the task (not defaulting to the most capable model when
   a smaller one is sufficient)?
 - Are results cached to avoid redundant calls for identical inputs?
-- Are tool calls batched where possible?
+- Are tool calls and LLM API calls batched where possible?
 - Is there a mechanism to skip re-evaluation when inputs have not changed?
 """
 
