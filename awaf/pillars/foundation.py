@@ -13,6 +13,13 @@ _WHAT = """\
 IMPORTANT — Foundation Fail: A score below 40 is a Foundation Fail. Note this explicitly
 in your findings. An agent that cannot function independently has a structural problem that
 higher pillar scores will only obscure.
+
+PATTERN CHECK (advisory, non-scored): Consider whether the agent pattern is justified by the
+use case. Complex, multi-step, adaptive tasks with real-time decisions warrant a true agent.
+Deterministic workflows, simple Q&A, or single-shot tool calls are better served by simpler
+patterns (workflow, augmented LLM, or prompt). If evidence suggests a simpler pattern would
+suffice, include a Medium finding with severity "Caution" — but do not reduce the Foundation
+score for it. The user may have already built the agent; this is retrospective guidance only.
 """
 
 _EVIDENCE = """\
