@@ -34,11 +34,13 @@ class ProviderResponse:
     """
 
     content: str  # the model's text response
-    input_tokens: int
+    input_tokens: int  # total input tokens (regular + cache_creation + cache_read)
     output_tokens: int
     model: str  # actual model used (may differ from requested for aliases)
     provider: str  # "anthropic" | "openai" | etc.
     latency_ms: int
+    cache_creation_input_tokens: int = 0  # tokens written to prompt cache (Anthropic only)
+    cache_read_input_tokens: int = 0  # tokens read from prompt cache (Anthropic only)
     raw: dict = field(default_factory=dict)  # type: ignore[type-arg]  # raw response dict for debugging; never used in scoring
 
 

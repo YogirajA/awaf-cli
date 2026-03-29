@@ -71,6 +71,8 @@ class AssessmentResult:
     budget_exceeded: bool = False
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cache_creation_tokens: int = 0
+    total_cache_read_tokens: int = 0
     estimated_cost_usd: float = 0.0
     suspect_warnings: list[str] = field(default_factory=list)
 
@@ -101,7 +103,7 @@ def run_assessment(
     artifact_content: str,
     pillar_filter: str | None = None,
     session_budget_usd: float | None = None,
-    estimate_cost_fn: Callable[[str, int, int], float] | None = None,
+    estimate_cost_fn: Callable[..., float] | None = None,
     model: str = "",
     pillar_delay_seconds: float = 0.0,
     on_pillar_start: Callable[[str], None] | None = None,
@@ -155,10 +157,16 @@ def run_assessment(
                 )
             results.append(result)
 
-            if estimate_cost_fn and session_budget_usd is not None:
-                cost = estimate_cost_fn(model, result.input_tokens, result.output_tokens)
+            if estimate_cost_fn:
+                cost = estimate_cost_fn(
+                    model,
+                    result.input_tokens,
+                    result.output_tokens,
+                    result.cache_creation_input_tokens,
+                    result.cache_read_input_tokens,
+                )
                 cumulative_cost += cost
-                if cumulative_cost >= session_budget_usd:
+                if session_budget_usd is not None and cumulative_cost >= session_budget_usd:
                     budget_exceeded = True
                     logger.warning(
                         "Session budget $%.4f reached after '%s'. Skipping remaining pillars.",
@@ -202,10 +210,16 @@ def run_assessment(
             results.append(f_result)
 
             # Budget check after Foundation
-            if estimate_cost_fn and session_budget_usd is not None:
-                cost = estimate_cost_fn(model, f_result.input_tokens, f_result.output_tokens)
+            if estimate_cost_fn:
+                cost = estimate_cost_fn(
+                    model,
+                    f_result.input_tokens,
+                    f_result.output_tokens,
+                    f_result.cache_creation_input_tokens,
+                    f_result.cache_read_input_tokens,
+                )
                 cumulative_cost += cost
-                if cumulative_cost >= session_budget_usd:
+                if session_budget_usd is not None and cumulative_cost >= session_budget_usd:
                     budget_exceeded = True
                     logger.warning(
                         "Session budget $%.4f reached after 'Foundation'. Skipping remaining pillars.",
@@ -254,12 +268,19 @@ def run_assessment(
                             )
                         results.append(result)
 
-                        if estimate_cost_fn and session_budget_usd is not None:
+                        if estimate_cost_fn:
                             cost = estimate_cost_fn(
-                                model, result.input_tokens, result.output_tokens
+                                model,
+                                result.input_tokens,
+                                result.output_tokens,
+                                result.cache_creation_input_tokens,
+                                result.cache_read_input_tokens,
                             )
                             cumulative_cost += cost
-                            if cumulative_cost >= session_budget_usd:
+                            if (
+                                session_budget_usd is not None
+                                and cumulative_cost >= session_budget_usd
+                            ):
                                 budget_exceeded = True
                                 logger.warning(
                                     "Session budget $%.4f reached after '%s'. Skipping remaining pillars.",
@@ -310,10 +331,16 @@ def run_assessment(
                         )
                     results.append(result)
 
-                    if estimate_cost_fn and session_budget_usd is not None:
-                        cost = estimate_cost_fn(model, result.input_tokens, result.output_tokens)
+                    if estimate_cost_fn:
+                        cost = estimate_cost_fn(
+                            model,
+                            result.input_tokens,
+                            result.output_tokens,
+                            result.cache_creation_input_tokens,
+                            result.cache_read_input_tokens,
+                        )
                         cumulative_cost += cost
-                        if cumulative_cost >= session_budget_usd:
+                        if session_budget_usd is not None and cumulative_cost >= session_budget_usd:
                             budget_exceeded = True
                             logger.warning(
                                 "Session budget $%.4f reached after '%s'. Skipping remaining pillars.",
@@ -347,7 +374,8 @@ def run_assessment(
 
     total_in = sum(r.input_tokens for r in results)
     total_out = sum(r.output_tokens for r in results)
-    cost = cumulative_cost
+    total_cache_create = sum(r.cache_creation_input_tokens for r in results)
+    total_cache_read = sum(r.cache_read_input_tokens for r in results)
 
     return AssessmentResult(
         pillar_results=results,
@@ -356,7 +384,9 @@ def run_assessment(
         budget_exceeded=budget_exceeded,
         total_input_tokens=total_in,
         total_output_tokens=total_out,
-        estimated_cost_usd=cost,
+        total_cache_creation_tokens=total_cache_create,
+        total_cache_read_tokens=total_cache_read,
+        estimated_cost_usd=cumulative_cost,
         suspect_warnings=cluster_warnings,
     )
 

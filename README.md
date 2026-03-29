@@ -110,7 +110,7 @@ AWAF v1.0  |  2026-03-15  |  openai / gpt-4o
   Overall Score    78/100   Near Ready
   Close to production. Address findings before deploying.
 
-  Scale: Production Ready >=90 · Near Ready >=75 · Needs Work >=50
+  Scale: Production Ready >=85 · Near Ready >=70 · Needs Work >=50
          High Risk >=25 · Not Ready <25
   Foundation <40 = automatic FAIL regardless of overall score.
   Tier 2 pillars (Reasoning, Controllability, Context Integrity) carry 1.5x weight.
@@ -440,7 +440,7 @@ Six months of CI runs become your architectural changelog.
 
 ## How It Works
 
-awaf-cli sends your architecture artifacts to the LLM provider of your choice. Each of the 10 AWAF pillars is evaluated by a separate model call running sequentially by default (enables prompt cache sharing for ~90% cost reduction on Anthropic). Use `--parallel` for concurrent execution. Results are written to a local SQLite database. No central coordinator. No shared state between pillar evaluations.
+awaf-cli sends your architecture artifacts to the LLM provider of your choice. Each of the 10 AWAF pillars is evaluated by a separate model call running sequentially by default. On Anthropic, the artifact content is sent as a shared cached system block — Foundation writes it to cache, and the remaining 9 pillars read from the same cache key at ~10% of the write cost (~65–80% total cost reduction vs. uncached). Use `--parallel` for concurrent execution. Results are written to a local SQLite database. No central coordinator. No shared state between pillar evaluations.
 
 ```
 Artifacts → Ingestor → Preflight check → [10 Pillar Agents sequentially] → Validator → SQLite → Terminal
@@ -478,10 +478,11 @@ AWAF_MAX_CONTEXT_PCT=85          # abort if per-pillar token estimate exceeds th
 AWAF_CONCURRENCY=1               # pillar workers (default 1 = sequential/economical; set higher for --parallel override)
 AWAF_LOG_LEVEL=INFO
 
-# Anthropic: prompt caching is enabled automatically on system + user prompts.
-# Cached tokens do not count against the input TPM rate limit, reducing pressure
-# on Tier 1 plans (50K TPM for Haiku, 30K TPM for Sonnet/Opus).
-# Cache TTL is ~5 minutes; repeated runs within that window benefit most.
+# Anthropic: prompt caching is enabled automatically. The artifact content is
+# placed first in the system prompt as a shared cached block (cache key = artifact
+# only). Pillar criteria are appended uncached. Foundation writes the cache;
+# pillars 2-10 read from the same key at ~10% of the write cost.
+# Cache TTL is ~5 minutes; --runs N within that window gets cache reads on all runs after the first.
 
 # Token counting (Anthropic and Google)
 AWAF_EXACT_TOKEN_COUNT=1    # use provider API for exact token counts during ingest
@@ -608,7 +609,7 @@ Suspect pillars are shown in a `SUSPECT RESULTS` block in the output and marked 
   awaf run --model claude-sonnet-4-6
   ```
 - **Gate CI on band, not points.** Regression detection now fires only on band drops, not point drops.
-- **Run sequentially (default).** Prompt caching keeps the artifact impression consistent across all 10 pillar calls. `--parallel` disables this shared cache.
+- **Run sequentially (default).** Sequential execution ensures Foundation writes the artifact cache before pillars 2–10 run, maximizing cache hits. `--parallel` may cause multiple cache writes if requests race before Foundation completes.
 
 ---
 

@@ -63,11 +63,13 @@ class ProviderResponse:
     Pillar agents consume this; they never touch raw provider SDK objects.
     """
     content: str                              # the model's text response
-    input_tokens: int
+    input_tokens: int                         # total input tokens (regular + cache_creation + cache_read)
     output_tokens: int
     model: str                                # actual model used (may differ from requested for aliases)
     provider: str                             # "anthropic" | "openai" | etc.
     latency_ms: int
+    cache_creation_input_tokens: int = 0      # tokens written to prompt cache (Anthropic only)
+    cache_read_input_tokens: int = 0          # tokens read from prompt cache (Anthropic only)
     raw: dict = field(default_factory=dict)   # raw response dict for debugging; never used in scoring
 
 
@@ -246,7 +248,7 @@ def list_providers() -> list[str]:
 - Token counting: uses `len(text) // 4` heuristic by default (avoids API round-trips during ingest). Set `AWAF_EXACT_TOKEN_COUNT=1` to use `client.beta.messages.count_tokens()` for exact counts.
 - `default_model`: `"claude-haiku-4-5-20251001"` (50K TPM on Tier 1; ~20x cheaper than Opus)
 - `supports_system_prompt`: `True`
-- Prompt caching: add `cache_control: {"type": "ephemeral"}` to both system and user content blocks; pass `extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}`. Cache tokens (`cache_creation_input_tokens`, `cache_read_input_tokens`) must be included in `ProviderResponse.input_tokens` (use `getattr` with default 0 for SDK compatibility).
+- Prompt caching: artifact content goes **first** in the system prompt as a cached block (`cache_control: {"type": "ephemeral"}`). Pillar-specific criteria go **second** in the system prompt, uncached. User message contains only the small pillar question. This ensures all 10 pillar calls share the same artifact cache key (hash of artifact only), so Foundation writes it once and pillars 2–10 read at ~10% cost. Pass `extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}`. Populate `ProviderResponse.cache_creation_input_tokens` and `cache_read_input_tokens` from the API response (use `getattr` with default 0 for SDK compatibility). `input_tokens` in `ProviderResponse` must be the sum of all three types.
 - On `anthropic.APIStatusError` with status 429: raise `ProviderRateLimitError`, extract `retry-after` header if present
 - On `anthropic.APIStatusError` with status 401/403: raise `ProviderAuthError`
 - On `anthropic.APITimeoutError`: raise `ProviderTimeoutError`
@@ -421,10 +423,13 @@ def with_retry(
 ```python
 # Prices in USD per million tokens, as of 2026-02-01
 # Update periodically. Used for budget estimation only; not billed by awaf-cli.
+# Anthropic models include cache rates: cache_creation = 1.25x input, cache_read = 0.10x input
 PRICING: dict[str, dict[str, float]] = {
-    "claude-opus-4-5":   {"input": 15.00, "output": 75.00},
-    "claude-sonnet-4-5": {"input":  3.00, "output": 15.00},
-    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
+    "claude-opus-4-6":   {"input": 15.00, "cache_creation_input": 18.75, "cache_read_input": 1.50, "output": 75.00},
+    "claude-sonnet-4-6": {"input":  3.00, "cache_creation_input":  3.75, "cache_read_input": 0.30, "output": 15.00},
+    "claude-haiku-4-5":  {"input":  0.80, "cache_creation_input":  1.00, "cache_read_input": 0.08, "output":  4.00},
+    "claude-opus-4-5":   {"input": 15.00, "cache_creation_input": 18.75, "cache_read_input": 1.50, "output": 75.00},
+    "claude-sonnet-4-5": {"input":  3.00, "cache_creation_input":  3.75, "cache_read_input": 0.30, "output": 15.00},
     "gpt-4o":            {"input":  2.50, "output": 10.00},
     "gpt-4o-mini":       {"input":  0.15, "output":  0.60},
     "o3":                {"input": 10.00, "output": 40.00},
@@ -433,6 +438,8 @@ PRICING: dict[str, dict[str, float]] = {
 }
 FALLBACK_PRICING = {"input": 5.00, "output": 20.00}  # conservative fallback for unknown models
 ```
+
+`estimate_cost(model, input_tokens, output_tokens, cache_creation_input_tokens=0, cache_read_input_tokens=0)` — applies per-type rates. Regular input tokens = `input_tokens - cache_creation - cache_read`. Non-Anthropic providers pass 0 for cache tokens.
 
 ---
 
@@ -515,7 +522,7 @@ If a provider's SDK is not installed and the user attempts to use it, raise `Pro
 
 - [x] `awaf/providers/base.py` — `LLMProvider`, `ProviderConfig`, `ProviderResponse`, all exception classes
 - [x] `awaf/providers/__init__.py` — `ProviderRegistry`, `get_provider()`, `list_providers()`
-- [x] `awaf/providers/anthropic.py` — `AnthropicProvider` (prompt caching: artifact + system blocks cached)
+- [x] `awaf/providers/anthropic.py` — `AnthropicProvider` (prompt caching: artifact cached first in system, criteria uncached second; cache key shared across all 10 pillars)
 - [x] `awaf/providers/openai.py` — `OpenAIProvider`
 - [x] `awaf/providers/azure.py` — `AzureOpenAIProvider`
 - [x] `awaf/providers/google.py` — `GoogleProvider`
