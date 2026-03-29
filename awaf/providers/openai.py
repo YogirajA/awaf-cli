@@ -84,6 +84,7 @@ class OpenAIProvider(LLMProvider):
                 model=model,
                 max_tokens=self.config.max_tokens,
                 temperature=self.config.temperature,
+                seed=0,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
