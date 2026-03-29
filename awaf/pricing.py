@@ -1,5 +1,19 @@
 from __future__ import annotations
 
+import re
+
+
+def normalize_model(model: str) -> str:
+    """Strip trailing Anthropic date suffix (e.g. -20251001) for table lookups.
+
+    Anthropic model IDs include a date component that isn't part of the pricing key
+    (e.g. ``claude-haiku-4-5-20251001`` → ``claude-haiku-4-5``).  Stripping it lets
+    ``PRICING`` and ``CONTEXT_WINDOW`` use the stable family name without needing an
+    entry for every date-stamped release.
+    """
+    return re.sub(r"-\d{8}$", "", model)
+
+
 # Prices in USD per million tokens, as of 2026-02-01
 # Update periodically. Used for budget estimation only; not billed by awaf-cli.
 PRICING: dict[str, dict[str, float]] = {
@@ -53,6 +67,9 @@ FALLBACK_PRICING: dict[str, float] = {"input": 5.00, "output": 20.00}
 
 # Context window sizes in tokens (input limit per call)
 CONTEXT_WINDOW: dict[str, int] = {
+    "claude-opus-4-6": 200_000,
+    "claude-sonnet-4-6": 200_000,
+    "claude-haiku-4-6": 200_000,
     "claude-opus-4-5": 200_000,
     "claude-sonnet-4-5": 200_000,
     "claude-haiku-4-5": 200_000,
@@ -80,7 +97,7 @@ def estimate_cost(
     (1.25x and 0.10x the base input rate respectively). Non-Anthropic providers always
     pass 0 for cache tokens so this degrades to a simple input/output calculation.
     """
-    rates = PRICING.get(model, FALLBACK_PRICING)
+    rates = PRICING.get(model) or PRICING.get(normalize_model(model)) or FALLBACK_PRICING
     regular_input = input_tokens - cache_creation_input_tokens - cache_read_input_tokens
     input_cost = (regular_input / 1_000_000) * rates["input"]
     cache_create_cost = (cache_creation_input_tokens / 1_000_000) * rates.get(
