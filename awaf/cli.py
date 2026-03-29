@@ -117,6 +117,7 @@ def _average_assessments(assessments: list[Any]) -> Any:
     """Average N AssessmentResults into one for display and threshold checks."""
     from awaf.pillars import AssessmentResult, compute_overall_score
     from awaf.pillars.base import PillarResult
+    from awaf.validator import validate_assessment_cluster
 
     last = assessments[-1]
     averaged_pillars: list[PillarResult] = []
@@ -136,11 +137,13 @@ def _average_assessments(assessments: list[Any]) -> Any:
                 skip_reason=pr.skip_reason,
                 not_applicable=pr.not_applicable,
                 na_reason=pr.na_reason,
-                suspect=pr.suspect,
-                suspect_reason=pr.suspect_reason,
+                # suspect/suspect_reason re-evaluated below on averaged scores
             )
         )
     avg_overall = compute_overall_score(averaged_pillars)
+    # Re-run cluster detection on averaged scores so suspect flags reflect the
+    # mean result rather than whichever single run happened to be last.
+    cluster_warnings = validate_assessment_cluster(averaged_pillars)
     return AssessmentResult(
         pillar_results=averaged_pillars,
         overall_score=avg_overall,
@@ -148,8 +151,10 @@ def _average_assessments(assessments: list[Any]) -> Any:
         budget_exceeded=any(a.budget_exceeded for a in assessments),
         total_input_tokens=sum(a.total_input_tokens for a in assessments),
         total_output_tokens=sum(a.total_output_tokens for a in assessments),
+        total_cache_creation_tokens=sum(a.total_cache_creation_tokens for a in assessments),
+        total_cache_read_tokens=sum(a.total_cache_read_tokens for a in assessments),
         estimated_cost_usd=sum(a.estimated_cost_usd for a in assessments),
-        suspect_warnings=last.suspect_warnings,
+        suspect_warnings=cluster_warnings,
     )
 
 
@@ -382,9 +387,12 @@ def cli() -> None:
 )
 @click.option(
     "--out",
-    default="awaf-report.txt",
+    default=None,
     metavar="PATH",
-    help="Artifact text file path (default: awaf-report.txt). Empty string to disable.",
+    help=(
+        "Artifact text file path. Defaults to awaf-report.txt inside the scanned directory "
+        "(or CWD when scanning multiple paths). Pass an empty string to disable."
+    ),
 )
 @click.option(
     "--no-artifact",
@@ -435,6 +443,14 @@ def run(
     from awaf.ingestor import ingest
     from awaf.pillars import run_assessment
     from awaf.pricing import estimate_cost
+
+    # Resolve --out default: place report inside the scanned directory when there is
+    # exactly one path argument and it is a directory; otherwise fall back to CWD.
+    if out is None:
+        if len(paths) == 1 and os.path.isdir(paths[0]):
+            out = os.path.join(paths[0], "awaf-report.txt")
+        else:
+            out = "awaf-report.txt"
 
     toml_data = _read_toml()
     project_name = _project_name(toml_data) or os.path.basename(os.getcwd())

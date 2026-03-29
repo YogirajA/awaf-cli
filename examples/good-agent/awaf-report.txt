@@ -1,0 +1,305 @@
+   _      _  _  _    _      ___  
+  /_\    | || || |  /_\    | __| 
+ / _ \   | \/ \/ | / _ \   | _|  
+/_/ \_\   \_/\_/  /_/ \_\  |_        Agent Well-Architected Framework
+
+AWAF Assessment: awaf-cli
+AWAF v1.0 | 2026-03-29 | anthropic / claude-haiku-4-5-20251001
+========================================
+
+Overall Score: 94/100 -- Production Ready
+Fully ready. Variance within this band is noise.
+
+Scale: Production Ready 85-100 | Near Ready 70-84 | Needs Work 50-69
+       High Risk 25-49 | Not Ready 0-24
+Foundation <40 = automatic FAIL. Tier 2 pillars carry 1.5x weight.
+
+----------------------------------------
++======================+==========+==============+==============+=========+
+| Pillar               | Score    | Progress     | Confidence   |  Status |
++======================+==========+==============+==============+=========+
+| TIER 0 -- FOUNDATION                                                    |
++----------------------+----------+--------------+--------------+---------+
+| Foundation           | 100/100  | [##########] | verified     |    PASS |
++======================+==========+==============+==============+=========+
+| TIER 1 -- CLOUD WAF ADAPTED                                             |
++----------------------+----------+--------------+--------------+---------+
+| Op. Excellence       | 96/100   | [##########] | verified     |         |
+| Security             | 98/100   | [##########] | verified     |         |
+| Reliability          | 96/100   | [##########] | verified     |         |
+| Performance          | 82/100   | [########  ] | verified     |         |
+| Cost Optim.          | 93/100   | [######### ] | verified     |         |
+| Sustainability       | 87/100   | [######### ] | verified     |         |
++======================+==========+==============+==============+=========+
+| TIER 2 -- AGENT-NATIVE (1.5x weight)                                    |
++----------------------+----------+--------------+--------------+---------+
+| Reasoning Integ.     | 100/100  | [##########] | verified     |    1.5x |
+| Controllability      | 96/100   | [##########] | verified     |    1.5x |
+| Context Integrity    | 97/100   | [##########] | verified     |    1.5x |
++======================+==========+==============+==============+=========+
+
+----------------------------------------
+FILES ANALYZED: 13 files
+
+----------------------------------------
+FINDINGS (ordered by severity)
+  [High    ]  Op. Excellence      CloudWatch alarms defined in
+                                  cloudwatch_alarms.json (HighErrorRateAlarm,
+                                  HighLatencyAlarm, BudgetApproachingAlarm,
+                                  BudgetExhaustedAlarm) but agent.py does not
+                                  emit metrics via boto3.put_metric_data().
+                                  Alarms will not fire because no data is
+                                  being published to CloudWatch. Metrics are
+                                  logged to stdout/stderr only (agent.py line
+                                  260: logging.info with tokens, latency_ms)
+                                  but not pushed to CloudWatch Metrics
+                                  namespace 'SummarizerAgent'.
+  [High    ]  Performance         No context pruning before LLM calls. Full
+                                  file content passed to prompt without
+                                  deduplication or removal of stale sections.
+                                  Does not affect correctness but increases
+                                  token usage on repetitive batches. Evidence:
+                                  AWAF_SCORE.md 'Remaining Findings' section
+                                  explicitly lists this; agent.py line ~240
+                                  passes raw sanitized content directly to
+                                  prompt without preprocessing.
+  [Medium  ]  Op. Excellence      No automatic resume on crash. Checkpoint
+                                  file (.summarizer_checkpoint.jsonl) is
+                                  created and persisted (agent.py line 395),
+                                  but operator must manually pass --resume
+                                  flag after a failure. No auto-detection on
+                                  startup to resume from checkpoint if the
+                                  process crashes and restarts.
+  [Medium  ]  Op. Excellence      Reasoning audit log (.reasoning_audit.jsonl)
+                                  is local-only and lost on container
+                                  replacement. No integration with CloudWatch
+                                  Logs or Langfuse. Full reasoning trace
+                                  survives process restart but not
+                                  infrastructure restart (e.g., pod eviction,
+                                  container replacement in Kubernetes).
+  [Medium  ]  Op. Excellence      SLO breach is logged but not enforced.
+                                  agent.py line 260 logs 'SLO_BREACH' warning
+                                  when latency exceeds 8s, but no corrective
+                                  action is taken (no fallback model
+                                  selection, no batch abort, no circuit
+                                  breaker trigger). Warning is informational
+                                  only.
+  [Medium  ]  Performance         SLO breach (p95 > 8s) is logged but not
+                                  enforced -- no corrective action taken
+                                  (fallback model, batch abort, or retry with
+                                  different strategy). Evidence: agent.py line
+                                  ~285 logs 'SLO_BREACH' warning but continues
+                                  processing; no circuit breaker or model
+                                  downgrade triggered.
+  [Medium  ]  Cost Optim.         No request batching implemented. Each file
+                                  generates one independent LLM API call even
+                                  when processing multiple files in parallel.
+                                  Anthropic API supports batch processing
+                                  (claude-batch API) which could reduce per-
+                                  token cost by ~50% for non-time-sensitive
+                                  workloads. Currently all calls use
+                                  synchronous messages.create() at line 180.
+  [Medium  ]  Sustainability      No energy or carbon reporting mechanism.
+                                  Agent logs token usage and latency but does
+                                  not emit or track carbon footprint per call
+                                  or session. Sustainability reporting is
+                                  absent from cloudwatch_alarms.json and
+                                  monitoring infrastructure.
+  [Medium  ]  Controllability     No automated resume on crash -- operator
+                                  must manually pass --resume flag after agent
+                                  failure. Checkpoint file exists but startup
+                                  does not auto-detect and resume; requires
+                                  human intervention. agent.py:428 has
+                                  --resume flag but no auto-detection logic in
+                                  main().
+  [Medium  ]  Controllability     Audit log (.reasoning_audit.jsonl) is local-
+                                  only and lost on container replacement. No
+                                  integration with CloudWatch Logs or Langfuse
+                                  for durable, centralized audit trail.
+                                  agent.py:365-380 writes to local file only.
+  [Medium  ]  Context Integrity   Context window usage tracked in-memory
+                                  (_session_tokens_used) but not emitted to
+                                  CloudWatch or observability backend. Alarms
+                                  defined in cloudwatch_alarms.json but
+                                  boto3.put_metric_data() not wired in
+                                  agent.py. Operators cannot see token burn
+                                  rate in real time or correlate with
+                                  latency/errors.
+  [Medium  ]  Context Integrity   Audit log (.reasoning_audit.jsonl) is local-
+                                  only and lost on container replacement. No
+                                  integration with CloudWatch Logs or
+                                  Langfuse. Full reasoning trace survives
+                                  process restart but not infrastructure
+                                  restart.
+  [Low     ]  Controllability     No formal runbook for circuit breaker trip
+                                  (CIRCUIT_BREAKER_THRESHOLD exceeded).
+                                  Postmortem 2026-01-15 documents the incident
+                                  but no preventive runbook exists for
+                                  operators to follow when circuit breaker
+                                  fires. docs/postmortems/2026-01-15-api-
+                                  timeout-incident.md describes the problem
+                                  but README.md does not document the
+                                  response.
+  [Low     ]  Context Integrity   No context pruning before LLM calls. Full
+                                  file content passed to prompt without
+                                  deduplication or stale-section removal. Does
+                                  not affect correctness but increases token
+                                  usage on repetitive batches (e.g., re-
+                                  summarizing same file twice in one session).
+
+----------------------------------------
+RECOMMENDATIONS
+  Op. Excellence        Wire CloudWatch metrics emission: add
+                        boto3.put_metric_data() calls in agent.py summarize()
+                        function after line 260 to emit ErrorCount, LatencyMs,
+                        SessionTokensUsed, BudgetExhaustedCount to namespace
+                        'SummarizerAgent'. Assign to eng; due 2026-01-22 (past
+                        due -- reschedule).
+  Op. Excellence        Implement automatic resume on startup: modify agent.py
+                        main() to detect .summarizer_checkpoint.jsonl on
+                        startup and auto-load completed files without
+                        requiring --resume flag. Add logging at line 340 to
+                        indicate checkpoint was auto-loaded.
+  Op. Excellence        Persist audit log to CloudWatch Logs: modify
+                        _write_audit_log() in agent.py (line 310) to also call
+                        boto3.logs.put_log_events() with log group
+                        'summarizer-agent-reasoning' and stream name
+                        SESSION_ID. Ensures reasoning trace survives container
+                        replacement.
+  Op. Excellence        Enforce SLO breach with corrective action: modify
+                        agent.py line 260 to trigger circuit breaker or
+                        fallback model selection when p95 latency exceeds 8s.
+                        Document the corrective action in README.md runbooks.
+  Security              Wire boto3.put_metric_data() calls to emit CloudWatch
+                        metrics defined in cloudwatch_alarms.json
+                        (HighErrorRateAlarm, HighLatencyAlarm,
+                        BudgetApproachingAlarm, BudgetExhaustedAlarm).
+                        Currently alarms are defined but not triggered. Add
+                        metric emission in agent.py after each LLM call and
+                        budget check.
+  Security              Integrate .reasoning_audit.jsonl with CloudWatch Logs
+                        or Langfuse for durable, queryable reasoning traces.
+                        Current local-only storage is lost on container
+                        replacement. Add CloudWatch Logs sink in agent.py
+                        _write_audit_log() or export via Lambda.
+  Security              Restrict VPC endpoint security group to Anthropic IP
+                        ranges via AWS prefix list (network.tf line 11
+                        comment). Current 0.0.0.0/0 CIDR is overly broad; use
+                        aws_ec2_managed_prefix_list data source to lock to
+                        Anthropic's published IPs.
+  Performance           Implement context pruning in summarize() before LLM
+                        call: deduplicate repeated sentences, remove sections
+                        older than N days (if timestamps available), or
+                        truncate to top K% of content by relevance. Add to
+                        agent.py around line 235, before messages.create()
+                        call.
+  Performance           Enforce SLO breach corrective action: when latency_ms
+                        > 8000, either (a) retry with haiku model if sonnet
+                        was used, or (b) abort batch and log alert. Add
+                        conditional logic in agent.py after line 285.
+  Cost Optim.           Implement optional batch mode via --batch-api flag in
+                        agent.py main() that collects file summaries into a
+                        batch request and submits via Anthropic Batch API. Add
+                        batch_mode parameter to summarize() and route to batch
+                        submission endpoint instead of messages.create().
+                        Target: agent.py lines 180-195.
+  Sustainability        Add carbon footprint calculation to _write_audit_log()
+                        in agent.py: multiply input_tokens + output_tokens by
+                        Anthropic's published carbon per token (typically
+                        ~0.5g CO2e per 1M tokens), log to
+                        .reasoning_audit.jsonl and emit as CloudWatch metric
+                        'CarbonFootprintGrams' in
+                        monitoring/cloudwatch_alarms.json for sustainability
+                        dashboards.
+  Controllability       Add auto-resume logic to main() startup: check if
+                        CHECKPOINT_FILE exists and --resume not explicitly
+                        passed, then automatically load and resume from
+                        checkpoint. Implement in agent.py:main() before the
+                        'pending = [f for f in args.files if f not in
+                        completed]' line.
+  Controllability       Integrate audit log with CloudWatch Logs: add
+                        boto3.logs.put_log_events() call in _write_audit_log()
+                        to stream .reasoning_audit.jsonl entries to CloudWatch
+                        Logs group 'summarizer-agent-audit'. Requires IAM role
+                        with logs:PutLogEvents permission.
+  Controllability       Add circuit breaker runbook to README.md under
+                        'Runbooks' section: document that when circuit breaker
+                        trips (after CIRCUIT_BREAKER_THRESHOLD consecutive API
+                        failures), the agent exits with RuntimeError; operator
+                        should check Anthropic status page, wait for recovery,
+                        then re-run with --resume to continue the batch.
+  Context Integrity     Wire boto3.put_metric_data() in agent.py summarize()
+                        function to emit SessionTokensUsed, LatencyMs, and
+                        ErrorCount metrics to CloudWatch namespace
+                        'SummarizerAgent' on every LLM call. Target:
+                        2026-01-22 (past due).
+  Context Integrity     Integrate .reasoning_audit.jsonl with CloudWatch Logs
+                        via agent startup: read JSONL file and batch-publish
+                        to CloudWatch Logs group 'summarizer-agent-reasoning'
+                        on session start. Alternatively, add Langfuse
+                        integration via environment variable
+                        LANGFUSE_PUBLIC_KEY.
+  Context Integrity     Add optional context pruning before LLM calls: if
+                        content length > 10KB, extract first 3 sentences +
+                        last 3 sentences + any lines matching regex patterns
+                        (e.g., 'TODO', 'FIXME', 'Action item'). Store full
+                        content in audit log but pass pruned version to
+                        prompt. Controlled via env var ENABLE_CONTEXT_PRUNING.
+
+----------------------------------------
+TO IMPROVE THIS ASSESSMENT
+  If future composition is required, document the event/queue boundary in a
+  new ADR (ADR-001 anticipates this but does not yet define the contract).
+  Add a runtime assertion in main() to detect if summarize() is ever imported
+  and called by another module (defensive check against boundary violation).
+  Add boto3.put_metric_data() calls in agent.py to wire CloudWatch alarms
+  (highest impact -- alarms currently defined but non-functional)
+
+----------------------------------------
+EVIDENCE GAPS
+  CloudWatch Metrics integration code (boto3.put_metric_data calls) -- affects
+  Operational Excellence observability
+  Automatic checkpoint resume on startup -- affects Operational Excellence
+  resilience
+  CloudWatch Logs integration for audit trail -- affects Operational
+  Excellence durability
+  SLO enforcement with corrective action -- affects Operational Excellence
+  reliability
+  No secrets manager integration (AWS Secrets Manager, HashiCorp Vault) -- API
+  key is env var only. For production, rotate via Secrets Manager with
+  automatic credential refresh.
+  No penetration test or Snyk security scan output provided -- cannot verify
+  absence of code-level injection vulnerabilities beyond regex-based
+  sanitization.
+  No IAM policy document for the agent's execution role -- cannot verify
+  least-privilege at AWS level (e.g., no S3 read, no DynamoDB access).
+  No latency dashboard (Datadog/Grafana) linked; only local logging. Upgrade
+  confidence by adding CloudWatch Logs integration and p50/p95 percentile
+  metrics to cloudwatch_alarms.json.
+  No semantic caching or embedding-based deduplication. If context pruning is
+  implemented, consider adding vector similarity check to detect near-
+  duplicate files.
+  No token usage trend analysis over time. Add historical token tracking to
+  audit log to detect cost creep.
+  Cost trend analysis or historical token usage reports (would strengthen
+  confidence in budget adequacy)
+  Integration test showing budget hard stop prevents overage (would verify
+  enforcement under load)
+  Carbon footprint or energy consumption metrics -- affects Sustainability
+  pillar only
+  No evidence of automated resume on startup (belongs to Controllability, not
+  Op. Excellence)
+  No evidence of centralized audit log storage (CloudWatch Logs, Langfuse, or
+  similar) -- local-only audit trail is a gap
+  No formal circuit breaker response runbook (belongs to Controllability, not
+  Op. Excellence)
+  CloudWatch Logs integration for audit trail (affects Operational Excellence
+  observability)
+  Real-time context window usage dashboard or export (affects Operational
+  Excellence monitoring)
+  Context pruning strategy documentation (affects Performance Efficiency)
+
+----------------------------------------
+Tokens: 896,468 in / 39,738 out
+Estimated cost: $0.2626 USD
+Generated: 2026-03-28 23:15
