@@ -1,26 +1,26 @@
 # AWAF Assessment — File Summarizer Agent
 
-**AWAF v1.0 | 2026-03-27**
+**AWAF v1.0 | 2026-03-28 | 4-run average**
 
 ---
 
-## Overall Score: 98 — Production Ready
+## Overall Score: 94 — Production Ready
 
-> **Why 98 is not inflated.** The AWAF scale is calibrated against operational reality, not code quality. Most production AI agents score in the **30–55 range** — they ship with clean code but no runbooks, no kill switch, no evals, and secrets in environment variables. The scale reflects that:
+> **Why 94 is not inflated.** The AWAF scale is calibrated against operational reality, not code quality. Most production AI agents score in the **30–55 range** — they ship with clean code but no runbooks, no kill switch, no evals, and secrets in environment variables. The scale reflects that:
 >
 > | Score | Rating | What it means in practice |
 > |-------|--------|--------------------------|
 > | 0–24 | Not Ready | Do not ship — structural problems that will cause outages |
 > | 25–49 | High Risk | Will cause production incidents; architectural rework needed |
-> | 50–74 | Needs Work | Meaningful gaps; addressable but not quickly |
-> | 75–89 | Near Ready | Minor gaps; addressable before go-live |
-> | **90–100** | **Production Ready** | **Sound patterns across all 10 pillars** |
+> | 50–69 | Needs Work | Meaningful gaps; addressable but not quickly |
+> | 70–84 | Near Ready | Minor gaps; addressable before go-live |
+> | **85–100** | **Production Ready** | **Sound patterns across all 10 pillars** |
 >
-> At 98, every pillar returned **verified** confidence. The two remaining High findings (CloudWatch metric emission, context pruning) are real but do not affect system safety or correctness — alarms are defined and wired, metrics just aren't pushed yet; summaries are correct whether or not content is pruned first. The difference between a 98-scoring agent and a 100-scoring agent is not architectural soundness — it is whether every operational integration is fully wired.
+> At 94, every pillar returned **verified** confidence. The remaining High findings (CloudWatch metric emission, context pruning) are real but do not affect system safety or correctness — alarms are defined and wired, metrics just aren't pushed yet; summaries are correct whether or not content is pruned first.
 
 ### Why this score is harder to reach than it looks
 
-Most agents that score below 60 are missing structural properties — no kill switch, no kill signal handling, no budget hard stop, no eval coverage, no audit trail. Retrofitting these after the fact requires architectural rework. The properties that pushed this agent from "good code" to 98:
+Most agents that score below 60 are missing structural properties — no kill switch, no kill signal handling, no budget hard stop, no eval coverage, no audit trail. Retrofitting these after the fact requires architectural rework. The properties that pushed this agent from "good code" to 94:
 
 | Property | Why it matters operationally |
 |----------|------------------------------|
@@ -44,17 +44,17 @@ Most agents that score below 60 are missing structural properties — no kill sw
 | Tier | Pillar | Score | Confidence |
 |------|--------|-------|------------|
 | **Tier 0** | Foundation | 100 | verified ✓ PASS |
-| **Tier 1** | Operational Excellence | 92 | verified |
-| **Tier 1** | Security | 100 | verified |
-| **Tier 1** | Reliability | 100 | verified |
-| **Tier 1** | Performance Efficiency | 91 | verified |
-| **Tier 1** | Cost Optimization | 100 | verified |
-| **Tier 1** | Sustainability | 100 | verified |
+| **Tier 1** | Operational Excellence | 96 | verified |
+| **Tier 1** | Security | 98 | verified |
+| **Tier 1** | Reliability | 96 | verified |
+| **Tier 1** | Performance Efficiency | 82 | verified |
+| **Tier 1** | Cost Optimization | 93 | verified |
+| **Tier 1** | Sustainability | 87 | verified |
 | **Tier 2 (1.5×)** | Reasoning Integrity | 100 | verified |
-| **Tier 2 (1.5×)** | Controllability | 100 | verified |
-| **Tier 2 (1.5×)** | Context Integrity | 100 | verified |
+| **Tier 2 (1.5×)** | Controllability | 96 | verified |
+| **Tier 2 (1.5×)** | Context Integrity | 97 | verified |
 
-Files analyzed: 13
+Files analyzed: 13 | Runs averaged: 4
 
 ---
 
@@ -65,7 +65,8 @@ Files analyzed: 13
 | Initial | ~43 | No evals, no audit trail, no kill switch, no circuit breaker |
 | Pass 2 | 83 | Kill switch, approval gate, checkpoint/resume, scope controls |
 | Pass 3 | 86 | Reasoning Integrity fixes: audit log, 50-case golden dataset, 21 hedge patterns, contradiction eval |
-| Pass 4 | **98** | Circuit breaker, file I/O timeout, extractive fallback, parallel processing, thread-safe state |
+| Pass 4 | 98 | Circuit breaker, file I/O timeout, extractive fallback, parallel processing, thread-safe state |
+| 2026-03-28 | **94** | 4-run average (Haiku); replaces single-run 98; more reliable baseline |
 
 ---
 
@@ -79,6 +80,8 @@ Files analyzed: 13
 - **Op. Excellence:** No automatic resume on crash — operator must pass `--resume` manually after a failure. Checkpoint file exists but no auto-detection on startup.
 - **Op. Excellence / Reasoning:** `.reasoning_audit.jsonl` is durable but local-only. Lost on container replacement. No CloudWatch Logs or Langfuse integration.
 - **Performance:** SLO breach is logged (`SLO_BREACH` warning at 8 s) but not enforced — no corrective action taken (fallback model, batch abort).
+- **Cost Optim.:** No request batching implemented. Each file generates one independent LLM API call; Anthropic Batch API could reduce per-token cost ~50% for non-time-sensitive workloads.
+- **Sustainability:** No energy or carbon reporting mechanism. Token usage logged but no carbon footprint emitted to CloudWatch or audit log.
 
 ---
 
