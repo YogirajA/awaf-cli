@@ -80,6 +80,13 @@ Place this breakdown in the "tally" field. The score field MUST equal the comput
 Do NOT adjust the score holistically after computing the tally.
 """
 
+_HAIKU_SUFFIX = """\
+
+MODEL GUIDANCE (compact mode): Be concise. One sentence per tally entry. No extended
+reasoning chains. Go directly to the tally and JSON output. Abbreviate evidence citations
+to file:line or a short phrase only.
+"""
+
 _JSON_SCHEMA = """\
 Return ONLY valid JSON (no markdown fences, no commentary before or after) with this exact structure:
 {
@@ -128,17 +135,22 @@ class PillarAgent(ABC):
         provider: LLMProvider,
         artifact_content: str,
         max_retries: int = 3,
+        model: str = "",
     ) -> PillarResult:
         """
         Call the provider, parse the JSON response, and return a PillarResult.
         Retries are handled by with_retry(). Parse failures return a low-confidence result.
         """
+        system = self.system_prompt
+        if "haiku" in model.lower():
+            system = system + _HAIKU_SUFFIX
+
         # Small pillar-specific question -- artifact passed separately for caching
         user_prompt = f"Evaluate the above artifacts against the {self.name} pillar."
 
         response = with_retry(
             provider,
-            system_prompt=self.system_prompt,
+            system_prompt=system,
             user_prompt=user_prompt,
             artifact_content=artifact_content,
             max_retries=max_retries,

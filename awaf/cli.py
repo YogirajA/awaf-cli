@@ -43,15 +43,15 @@ _PROVIDER_TABLE: list[tuple[str, str, str]] = [
 ]
 
 _READINESS: list[tuple[int, str]] = [
-    (90, "Production Ready"),
-    (75, "Near Ready"),
+    (85, "Production Ready"),
+    (70, "Near Ready"),
     (50, "Needs Work"),
     (25, "High Risk"),
     (0, "Not Ready"),
 ]
 
 _READINESS_DESCRIPTIONS: dict[str, str] = {
-    "Production Ready": "Agent is production-grade. Minor improvements only.",
+    "Production Ready": "Fully ready. Variance within this band is noise.",
     "Near Ready": "Close to production. Address findings before deploying.",
     "Needs Work": "Notable gaps. Resolve High findings before production use.",
     "High Risk": "Significant control failures. Not suitable for production.",
@@ -404,7 +404,6 @@ def run(
     toml_thresholds = toml_data.get("thresholds", {})
     overall_fail = int(toml_thresholds.get("overall_fail", 60))
     tier2_fail = int(toml_thresholds.get("tier2_fail", 50))
-    regression_limit = int(toml_thresholds.get("regression_limit", 10))
     warn_only = bool(toml_thresholds.get("warn_only", False))
 
     # Azure flag injection
@@ -682,8 +681,8 @@ def run(
     click.echo(f"  Overall Score    {int(assessment.overall_score)}/100   {_label}")
     click.echo(f"  {_desc}")
     click.echo()
-    click.echo("  Scale: Production Ready >=90 · Near Ready >=75 · Needs Work >=50")
-    click.echo("         High Risk >=25 · Not Ready <25")
+    click.echo("  Scale: Production Ready 85-100 · Near Ready 70-84 · Needs Work 50-69")
+    click.echo("         High Risk 25-49 · Not Ready 0-24")
     click.echo("  Foundation <40 = automatic FAIL regardless of overall score.")
     click.echo(
         "  Tier 2 pillars (Reasoning, Controllability, Context Integrity) carry 1.5x weight."
@@ -877,17 +876,21 @@ def run(
     ]
     tier2_avg = sum(tier2_scores) / len(tier2_scores) if tier2_scores else 100.0
 
-    # Regression check against most recent previous run
+    # Regression check against most recent previous run — band-based, not point-based.
+    # Moving within a band is expected variance; only a band drop is a potential regression.
     from awaf.db import get_recent_assessments as _get_recent
 
     prev = _get_recent(project_name, limit=2)
     regressed = False
     if len(prev) >= 2:
         previous_score = prev[1].overall_score  # prev[0] is the one we just saved
-        delta = previous_score - assessment.overall_score
-        if delta >= regression_limit:
+        prev_band = _readiness_label(previous_score)
+        curr_band = _readiness_label(assessment.overall_score)
+        if prev_band != curr_band and previous_score > assessment.overall_score:
             click.echo(
-                f"  WARNING: score dropped {int(delta)} points (limit: {regression_limit})",
+                f"  WARNING: band dropped from '{prev_band}' to '{curr_band}' "
+                f"({int(previous_score)} → {int(assessment.overall_score)}). "
+                "Confirm with multiple runs (--runs N) before treating as a regression.",
                 err=True,
             )
             regressed = True
@@ -1453,8 +1456,8 @@ def _write_artifact(
     a(f"Overall Score: {int(assessment.overall_score)}/100 -- {label}")
     a(_asc(desc))
     a("")
-    a("Scale: Production Ready >=90 | Near Ready >=75 | Needs Work >=50")
-    a("       High Risk >=25 | Not Ready <25")
+    a("Scale: Production Ready 85-100 | Near Ready 70-84 | Needs Work 50-69")
+    a("       High Risk 25-49 | Not Ready 0-24")
     a("Foundation <40 = automatic FAIL. Tier 2 pillars carry 1.5x weight.")
     a("")
     a(SEP_MINOR)

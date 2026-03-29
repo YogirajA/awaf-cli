@@ -388,6 +388,36 @@ When something cannot be verified, the output says so explicitly. Partial confid
 
 ---
 
+## Scoring and Bands
+
+AWAF scores are interpreted as **bands**, not point estimates. LLM-based assessment has inherent run-to-run variance of ±3–10 points; moving within a band is noise. Only crossing a band boundary is meaningful.
+
+| Band | Range | Label | Meaning |
+|------|-------|-------|---------|
+| 5 | 85–100 | Production Ready | Fully ready. Variance within this band is noise. |
+| 4 | 70–84 | Near Ready | Close to production. Address findings before deploying. |
+| 3 | 50–69 | Needs Work | Notable gaps. Resolve High findings first. |
+| 2 | 25–49 | High Risk | Significant control failures. Not production suitable. |
+| 1 | 0–24 | Not Ready | Critical gaps. Major rework required. |
+
+**Thrashing between bands is expected and should be ignored.** A score that moves from 91 to 85 between runs has not regressed — both are Production Ready.
+
+**A band change is only meaningful when both conditions are met:**
+1. Significant agentic code changes are detected (not just docs or tests)
+2. Multiple runs confirm the new band
+
+When `awaf run` detects a band drop, the warning message says:
+> Band dropped from 'Production Ready' to 'Near Ready' (88 → 72). Confirm with multiple runs (--runs N) before treating as a regression.
+
+**To confirm a band change is real:**
+```bash
+awaf run --runs 3 --force   # run 3 times, check if all 3 land in the same band
+```
+
+Point scores within a band are not comparable run-to-run. Compare bands, not points.
+
+---
+
 ## Score History
 
 Every assessment is stored locally in `awaf.db`. Score history is tracked per project, per branch, per commit, and per provider/model.
@@ -564,12 +594,16 @@ Suspect pillars are shown in a `SUSPECT RESULTS` block in the output and marked 
 
 **What to do**
 
-- **Don't chase single-run regressions.** A 5-point drop in one pillar after an unrelated change is noise, not signal. Track the **overall score trend** across multiple runs.
+- **Don't chase single-run regressions.** A 5-point drop after an unrelated change is noise. Track **band changes**, not point changes. See [Scoring and Bands](#scoring-and-bands).
+- **Use `--runs N` to confirm a band change is real.** If all N runs land in the same new band, it is a real regression. If they split across two bands, it is variance.
+  ```bash
+  awaf run --runs 3 --force
+  ```
 - **Use a stronger model for stable scoring.** Sonnet and Opus show much less clustering and cross-pillar bleed than Haiku:
   ```bash
   awaf run --model claude-sonnet-4-6
   ```
-- **Gate CI on overall score, not individual pillars.** Set `regression_limit` in `awaf.toml` to trigger only on meaningful overall drops (default: 10 points).
+- **Gate CI on band, not points.** Regression detection now fires only on band drops, not point drops.
 - **Run sequentially (default).** Prompt caching keeps the artifact impression consistent across all 10 pillar calls. `--parallel` disables this shared cache.
 
 ---

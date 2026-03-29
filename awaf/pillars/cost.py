@@ -8,6 +8,7 @@ _WHAT = """\
 - Are token costs tracked per run?
 - Are cost alerts configured?
 - Are unnecessary tool calls eliminated?
+- Are tool calls and LLM API calls batched where possible to reduce per-request cost?
 """
 
 _EVIDENCE = """\

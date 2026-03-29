@@ -38,13 +38,14 @@ def _run_with_cb(
     content: str,
     cb: Callable[[str], None] | None,
     start_delay: float,
+    model: str = "",
 ) -> PillarResult:
     """Optionally delay, fire the progress callback, then run the pillar."""
     if start_delay > 0:
         time.sleep(start_delay)
     if cb:
         cb(agent.name)
-    return agent.evaluate(provider, content)
+    return agent.evaluate(provider, content, model=model)
 
 
 # All 10 pillar agents in assessment order
@@ -141,7 +142,7 @@ def run_assessment(
             if on_pillar_start:
                 on_pillar_start(agent.name)
             try:
-                result = agent.evaluate(provider, artifact_content)
+                result = agent.evaluate(provider, artifact_content, model=model)
                 result = validate_pillar_result(result, provider.config.max_tokens)
             except Exception as exc:
                 logger.warning("Pillar '%s' failed: %s", agent.name, exc)
@@ -187,7 +188,7 @@ def run_assessment(
             if on_pillar_start:
                 on_pillar_start(foundation_agent.name)
             try:
-                f_result = foundation_agent.evaluate(provider, artifact_content)
+                f_result = foundation_agent.evaluate(provider, artifact_content, model=model)
                 f_result = validate_pillar_result(f_result, provider.config.max_tokens)
             except Exception as exc:
                 logger.warning("Pillar 'Foundation' failed: %s", exc)
@@ -233,6 +234,7 @@ def run_assessment(
                             artifact_content,
                             on_pillar_start,
                             i * _STAGGER_S,
+                            model,
                         ): a
                         for i, a in enumerate(remaining_agents)
                     }
@@ -288,6 +290,7 @@ def run_assessment(
                         artifact_content,
                         on_pillar_start,
                         i * _STAGGER_S,
+                        model,
                     ): a
                     for i, a in enumerate(agents)
                 }
