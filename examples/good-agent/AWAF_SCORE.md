@@ -1,6 +1,6 @@
 # AWAF Assessment — File Summarizer Agent
 
-**AWAF v1.0 | 2026-03-28 | 4-run average**
+**AWAF v1.3 | 2026-03-28 | 4-run average**
 
 ---
 

@@ -105,7 +105,7 @@ awaf run --provider litellm --model bedrock/anthropic.claude-3-5-sonnet-20241022
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 AWAF Assessment: my-agent
-AWAF v1.0  |  2026-03-15  |  openai / gpt-4o
+AWAF v1.3  |  2026-03-15  |  openai / gpt-4o
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Overall Score    78/100   Near Ready
   Close to production. Address findings before deploying.
@@ -364,7 +364,7 @@ awaf run --delay 15
 
 ## What Gets Scored
 
-awaf-cli implements AWAF v1.0 across 10 pillars in 3 tiers. Full pillar definitions and scoring questions are in the specification repo.
+awaf-cli implements AWAF v1.3 across 10 pillars in 3 tiers. Full pillar definitions and scoring questions are in the specification repo.
 
 **Tier 0: Foundation.** Can this agent run independently?
 

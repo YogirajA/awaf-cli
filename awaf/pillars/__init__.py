@@ -79,7 +79,7 @@ class AssessmentResult:
 
 def compute_overall_score(results: list[PillarResult]) -> float:
     """
-    AWAF v1.0 weighted average:
+    AWAF v1.3 weighted average:
       overall = sum(score * weight) / sum(weights)
       Tier 2 pillars: 1.5x weight. All others: 1.0x.
     Skipped and not-applicable pillars are excluded from both numerator and denominator.

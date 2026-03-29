@@ -216,7 +216,7 @@ class PillarAgent(ABC):
     def _build_system_prompt(pillar_name: str, what_to_assess: str, evidence_sources: str) -> str:
         return (
             f"You are an expert AI systems architect evaluating production readiness.\n"
-            f"Assess the provided artifacts against the AWAF v1.0 **{pillar_name}** pillar.\n\n"
+            f"Assess the provided artifacts against the AWAF v1.3 **{pillar_name}** pillar.\n\n"
             f"## What to Assess\n{what_to_assess}\n\n"
             f"## Evidence Sources\n{evidence_sources}\n\n"
             f"{_SCORING_GUIDE}\n"

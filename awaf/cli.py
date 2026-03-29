@@ -435,7 +435,7 @@ def run(
     force: bool,
     runs: int,
 ) -> None:
-    """Assess agent architecture against AWAF v1.0 across 10 pillars."""
+    """Assess agent architecture against AWAF v1.3 across 10 pillars."""
     import json as _json
     import subprocess
 
@@ -738,7 +738,7 @@ def run(
     _desc = _readiness_description(assessment.overall_score)
     click.echo(_BANNER)
     click.echo(f"AWAF Assessment: {project_name}")
-    click.echo(f"AWAF v1.0  |  {_today()}  |  {config.provider_name} / {effective_model}")
+    click.echo(f"AWAF v1.3  |  {_today()}  |  {config.provider_name} / {effective_model}")
     click.echo(_SEP)
     click.echo(f"  Overall Score    {int(assessment.overall_score)}/100   {_label}")
     click.echo(f"  {_desc}")
@@ -1246,7 +1246,7 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
         return
 
     click.echo(f"\nAWAF Assessment: {rec.project_name or project_name}")
-    click.echo(f"AWAF v1.0  |  {rec.created_at.strftime('%Y-%m-%d')}")
+    click.echo(f"AWAF v1.3  |  {rec.created_at.strftime('%Y-%m-%d')}")
     click.echo(_SEP)
     click.echo(
         f"  Overall Score    {int(rec.overall_score)}  {_readiness_label(rec.overall_score)}"
@@ -1431,7 +1431,7 @@ def _write_artifact(
         a(banner_line)
     a("")
     a(f"AWAF Assessment: {project_name}")
-    a(f"AWAF v1.0 | {date} | {provider_name} / {effective_model}")
+    a(f"AWAF v1.3 | {date} | {provider_name} / {effective_model}")
     a(SEP_MAJOR)
     a("")
     a(f"Overall Score: {int(assessment.overall_score)}/100 -- {label}")
