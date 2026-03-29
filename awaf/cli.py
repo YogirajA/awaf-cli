@@ -150,7 +150,7 @@ def _print_variance_chart(assessments: list[Any], out_path: str) -> None:
 
     # Terminal chart via plotext
     try:
-        import plotext as plt  # type: ignore[import-untyped]
+        import plotext as plt
 
         plt.clf()
         plt.bar(pillar_names, means, orientation="horizontal", width=0.4)
@@ -166,7 +166,7 @@ def _print_variance_chart(assessments: list[Any], out_path: str) -> None:
 
     # PNG via matplotlib (optional dep)
     try:
-        import matplotlib.pyplot as mpl  # type: ignore[import-untyped]
+        import matplotlib.pyplot as mpl
 
         fig, ax = mpl.subplots(figsize=(10, 6))
         y_pos = range(len(pillar_names))
