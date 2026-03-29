@@ -5,6 +5,7 @@ import os
 import sys
 import tomllib
 from datetime import UTC
+from typing import Any
 
 import click
 
@@ -67,6 +68,129 @@ def _readiness_label(score: float) -> str:
 
 def _readiness_description(score: float) -> str:
     return _READINESS_DESCRIPTIONS.get(_readiness_label(score), "")
+
+
+def _average_assessments(assessments: list[Any]) -> Any:
+    """Average N AssessmentResults into one for display and threshold checks."""
+    import statistics as _stats
+
+    from awaf.pillars import AssessmentResult, compute_overall_score
+    from awaf.pillars.base import PillarResult
+
+    last = assessments[-1]
+    averaged_pillars: list[PillarResult] = []
+    for i, pr in enumerate(last.pillar_results):
+        scores = [a.pillar_results[i].score for a in assessments if not a.pillar_results[i].skipped]
+        avg_score = _stats.mean(scores) if scores else pr.score
+        averaged_pillars.append(
+            PillarResult(
+                name=pr.name,
+                score=round(avg_score),
+                confidence=pr.confidence,
+                findings=pr.findings,
+                recommendations=pr.recommendations,
+                evidence_gaps=pr.evidence_gaps,
+                improve_suggestions=pr.improve_suggestions,
+                skipped=pr.skipped,
+                skip_reason=pr.skip_reason,
+                not_applicable=pr.not_applicable,
+                na_reason=pr.na_reason,
+                suspect=pr.suspect,
+                suspect_reason=pr.suspect_reason,
+            )
+        )
+    avg_overall = compute_overall_score(averaged_pillars)
+    return AssessmentResult(
+        pillar_results=averaged_pillars,
+        overall_score=avg_overall,
+        foundation_passed=all(a.foundation_passed for a in assessments),
+        budget_exceeded=any(a.budget_exceeded for a in assessments),
+        total_input_tokens=sum(a.total_input_tokens for a in assessments),
+        total_output_tokens=sum(a.total_output_tokens for a in assessments),
+        estimated_cost_usd=sum(a.estimated_cost_usd for a in assessments),
+        suspect_warnings=last.suspect_warnings,
+    )
+
+
+def _print_variance_table(assessments: list[Any]) -> None:
+    """Print mean ± std dev per pillar after multi-run assessment."""
+    import statistics as _stats
+
+    click.echo()
+    click.echo(f"  VARIANCE  ({len(assessments)} runs)")
+    click.echo(f"  {'Pillar':<22} {'Mean':>6}  {'± Std Dev':>10}")
+    click.echo("  " + "─" * 44)
+    for i, pr in enumerate(assessments[0].pillar_results):
+        scores = [a.pillar_results[i].score for a in assessments if not a.pillar_results[i].skipped]
+        if not scores:
+            continue
+        mean = _stats.mean(scores)
+        stdev = _stats.stdev(scores) if len(scores) > 1 else 0.0
+        click.echo(f"  {pr.name:<22} {mean:>6.1f}  ±{stdev:>8.1f}")
+    overall = [a.overall_score for a in assessments]
+    click.echo("  " + "─" * 44)
+    click.echo(
+        f"  {'Overall':<22} {_stats.mean(overall):>6.1f}  ±{_stats.stdev(overall) if len(overall) > 1 else 0.0:>8.1f}"
+    )
+
+
+def _print_variance_chart(assessments: list[Any], out_path: str) -> None:
+    """Render terminal bar chart (plotext) and optionally save PNG (matplotlib)."""
+    import statistics as _stats
+
+    pillar_names = [pr.name for pr in assessments[0].pillar_results if not pr.skipped]
+    means = []
+    stdevs = []
+    for i, pr in enumerate(assessments[0].pillar_results):
+        if pr.skipped:
+            continue
+        scores = [a.pillar_results[i].score for a in assessments if not a.pillar_results[i].skipped]
+        means.append(_stats.mean(scores) if scores else 0.0)
+        stdevs.append(_stats.stdev(scores) if len(scores) > 1 else 0.0)
+
+    # Terminal chart via plotext
+    try:
+        import plotext as plt
+
+        plt.clf()
+        plt.bar(pillar_names, means, orientation="horizontal", width=0.4)
+        plt.title(f"AWAF Pillar Scores — mean across {len(assessments)} runs")
+        plt.xlabel("Score (0–100)")
+        plt.vline(25, "red")
+        plt.vline(50, "yellow")
+        plt.vline(70, "cyan")
+        plt.vline(85, "green")
+        plt.show()
+    except Exception:
+        pass  # plotext unavailable or render failed; variance table already shown
+
+    # PNG via matplotlib (optional dep)
+    try:
+        import matplotlib.pyplot as mpl
+
+        fig, ax = mpl.subplots(figsize=(10, 6))
+        y_pos = range(len(pillar_names))
+        ax.barh(list(y_pos), means, xerr=stdevs, align="center", capsize=4)
+        ax.set_yticks(list(y_pos))
+        ax.set_yticklabels(pillar_names)
+        ax.set_xlabel("Score (0–100)")
+        ax.set_xlim(0, 100)
+        ax.set_title(f"AWAF Pillar Scores — mean ± std dev ({len(assessments)} runs)")
+        for x in (25, 50, 70, 85):
+            ax.axvline(x, color="grey", linestyle="--", linewidth=0.8)
+        mpl.tight_layout()
+        png_path = (
+            out_path.replace(".txt", "-variance.png")
+            if out_path.endswith(".txt")
+            else out_path + "-variance.png"
+        )
+        mpl.savefig(png_path, dpi=150)
+        mpl.close(fig)
+        click.echo(f"  Variance chart saved to {png_path}")
+    except ImportError:
+        click.echo("  Install awaf[variance] for PNG chart output.")
+    except Exception:
+        pass
 
 
 def _score_bar(score: float) -> str:
@@ -243,6 +367,13 @@ def cli() -> None:
     default=False,
     help="Skip change detection and schedule checks; always run the assessment.",
 )
+@click.option(
+    "--runs",
+    default=1,
+    metavar="N",
+    type=click.IntRange(min=1),
+    help="Run N assessments and average results. Use with --force for variance checks.",
+)
 def run(
     paths: tuple[str, ...],
     ci: bool,
@@ -257,6 +388,7 @@ def run(
     no_artifact: bool,
     allow_partial_scan: bool,
     force: bool,
+    runs: int,
 ) -> None:
     """Assess agent architecture against AWAF v1.0 across 10 pillars."""
     import json as _json
@@ -508,27 +640,36 @@ def run(
         ]
         artifact_content = "\n".join(note_lines) + "\n" + artifact_content
 
-    # Run pillar agents
+    # Run pillar agents (single run or multi-run loop)
     def _on_pillar_start(name: str) -> None:
         click.echo(f"  \u25b8 Evaluating {name}...")
 
-    try:
-        assessment = run_assessment(
-            provider=llm_provider,
-            artifact_content=artifact_content,
-            pillar_filter=pillar,
-            session_budget_usd=budget_usd,
-            estimate_cost_fn=estimate_cost,
-            model=effective_model,
-            pillar_delay_seconds=float(delay),
-            on_pillar_start=_on_pillar_start,
-        )
-    except ValueError as exc:
-        click.echo(f"Assessment error: {exc}", err=True)
-        sys.exit(2)
-    except Exception as exc:
-        click.echo(f"Assessment failed: {exc}", err=True)
-        sys.exit(2)
+    all_assessments: list[Any] = []
+    for run_idx in range(runs):
+        if runs > 1:
+            click.echo(f"\n  Run {run_idx + 1}/{runs}...")
+        try:
+            _result = run_assessment(
+                provider=llm_provider,
+                artifact_content=artifact_content,
+                pillar_filter=pillar,
+                session_budget_usd=budget_usd,
+                estimate_cost_fn=estimate_cost,
+                model=effective_model,
+                pillar_delay_seconds=float(delay),
+                on_pillar_start=_on_pillar_start if runs == 1 else None,
+            )
+        except ValueError as exc:
+            click.echo(f"Assessment error: {exc}", err=True)
+            sys.exit(2)
+        except Exception as exc:
+            click.echo(f"Assessment failed: {exc}", err=True)
+            sys.exit(2)
+        all_assessments.append(_result)
+        if runs > 1:
+            click.echo(f"    Score: {int(_result.overall_score)}/100")
+
+    assessment = _average_assessments(all_assessments) if runs > 1 else all_assessments[0]
 
     # Display
     _label = _readiness_label(assessment.overall_score)
@@ -546,9 +687,17 @@ def run(
     click.echo(
         "  Tier 2 pillars (Reasoning, Controllability, Context Integrity) carry 1.5x weight."
     )
+    if runs > 1:
+        click.echo(
+            f"  Averaged across {runs} runs  |  Total cost ${assessment.estimated_cost_usd:.4f}"
+        )
     click.echo()
 
     _print_run_pillars(assessment)
+
+    if runs > 1:
+        _print_variance_table(all_assessments)
+        _print_variance_chart(all_assessments, out)
 
     click.echo(f"  FILES ANALYZED     {len(ingest_result.files_scanned)} files")
     if ingest_result.files_skipped:
@@ -648,53 +797,59 @@ def run(
                 click.echo("  " + chunk)
         click.echo(_SEP)
 
-    # Persist
-    pmap = {r.name: r for r in assessment.pillar_results}
+    # Persist — each run as its own DB row; multi-run rows tagged with note
+    def _save_one(result: Any, note: str = "") -> None:
+        rmap = {r.name: r for r in result.pillar_results}
 
-    def _score(name: str) -> float | None:
-        r = pmap.get(name)
-        return r.score if r and not r.skipped else None
+        def _score(name: str) -> float | None:
+            r = rmap.get(name)
+            return r.score if r and not r.skipped else None
 
-    def _conf(name: str) -> str | None:
-        r = pmap.get(name)
-        return r.confidence if r and not r.skipped else None
+        def _conf(name: str) -> str | None:
+            r = rmap.get(name)
+            return r.confidence if r and not r.skipped else None
 
-    save_assessment(
-        project_name=project_name,
-        overall_score=assessment.overall_score,
-        provider=config.provider_name,
-        model=effective_model,
-        commit_hash=commit_hash,
-        branch=branch,
-        foundation_score=_score("Foundation"),
-        op_excellence_score=_score("Op. Excellence"),
-        security_score=_score("Security"),
-        reliability_score=_score("Reliability"),
-        performance_score=_score("Performance"),
-        cost_score=_score("Cost Optim."),
-        sustainability_score=_score("Sustainability"),
-        reasoning_score=_score("Reasoning Integ."),
-        controllability_score=_score("Controllability"),
-        context_integrity_score=_score("Context Integrity"),
-        foundation_confidence=_conf("Foundation"),
-        op_excellence_confidence=_conf("Op. Excellence"),
-        security_confidence=_conf("Security"),
-        reliability_confidence=_conf("Reliability"),
-        performance_confidence=_conf("Performance"),
-        cost_confidence=_conf("Cost Optim."),
-        sustainability_confidence=_conf("Sustainability"),
-        reasoning_confidence=_conf("Reasoning Integ."),
-        controllability_confidence=_conf("Controllability"),
-        context_integrity_confidence=_conf("Context Integrity"),
-        evidence_reviewed=_json.dumps(ingest_result.files_scanned),
-        evidence_gaps=_json.dumps(all_gaps),
-        findings=_json.dumps(all_findings),
-        recommendations=_json.dumps(all_recs),
-        improve_suggestions=_json.dumps(all_improvements[:3]),
-        total_input_tokens=assessment.total_input_tokens,
-        total_output_tokens=assessment.total_output_tokens,
-        estimated_cost_usd=assessment.estimated_cost_usd,
-    )
+        save_assessment(
+            project_name=project_name,
+            overall_score=result.overall_score,
+            provider=config.provider_name,
+            model=effective_model,
+            commit_hash=commit_hash,
+            branch=branch,
+            foundation_score=_score("Foundation"),
+            op_excellence_score=_score("Op. Excellence"),
+            security_score=_score("Security"),
+            reliability_score=_score("Reliability"),
+            performance_score=_score("Performance"),
+            cost_score=_score("Cost Optim."),
+            sustainability_score=_score("Sustainability"),
+            reasoning_score=_score("Reasoning Integ."),
+            controllability_score=_score("Controllability"),
+            context_integrity_score=_score("Context Integrity"),
+            foundation_confidence=_conf("Foundation"),
+            op_excellence_confidence=_conf("Op. Excellence"),
+            security_confidence=_conf("Security"),
+            reliability_confidence=_conf("Reliability"),
+            performance_confidence=_conf("Performance"),
+            cost_confidence=_conf("Cost Optim."),
+            sustainability_confidence=_conf("Sustainability"),
+            reasoning_confidence=_conf("Reasoning Integ."),
+            controllability_confidence=_conf("Controllability"),
+            context_integrity_confidence=_conf("Context Integrity"),
+            evidence_reviewed=_json.dumps(ingest_result.files_scanned),
+            evidence_gaps=_json.dumps(all_gaps),
+            findings=_json.dumps(all_findings),
+            recommendations=_json.dumps(all_recs),
+            improve_suggestions=_json.dumps(all_improvements[:3]),
+            total_input_tokens=result.total_input_tokens,
+            total_output_tokens=result.total_output_tokens,
+            estimated_cost_usd=result.estimated_cost_usd,
+            note=note,
+        )
+
+    for idx, run_result in enumerate(all_assessments):
+        run_note = f"run {idx + 1}/{runs}" if runs > 1 else ""
+        _save_one(run_result, note=run_note)
 
     # Write artifact text file
     if not no_artifact and out:
