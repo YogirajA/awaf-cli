@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 import os
+import statistics
 import sys
+import textwrap
 import tomllib
 from datetime import UTC
 from typing import Any
@@ -59,6 +61,29 @@ _READINESS_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+_TIER1_PILLAR_NAMES: frozenset[str] = frozenset(
+    {"Op. Excellence", "Security", "Reliability", "Performance", "Cost Optim.", "Sustainability"}
+)
+_TIER2_PILLAR_NAMES: frozenset[str] = frozenset(
+    {"Reasoning Integ.", "Controllability", "Context Integrity"}
+)
+
+# Canonical pillar definition: (display_name, score_attr, conf_attr, is_tier2)
+# Single source of truth for compare, report, and save_assessment.
+_PILLAR_ROWS: list[tuple[str, str, str, bool]] = [
+    ("Foundation", "foundation_score", "foundation_confidence", False),
+    ("Op. Excellence", "op_excellence_score", "op_excellence_confidence", False),
+    ("Security", "security_score", "security_confidence", False),
+    ("Reliability", "reliability_score", "reliability_confidence", False),
+    ("Performance", "performance_score", "performance_confidence", False),
+    ("Cost Optim.", "cost_score", "cost_confidence", False),
+    ("Sustainability", "sustainability_score", "sustainability_confidence", False),
+    ("Reasoning Integ.", "reasoning_score", "reasoning_confidence", True),
+    ("Controllability", "controllability_score", "controllability_confidence", True),
+    ("Context Integrity", "context_integrity_score", "context_integrity_confidence", True),
+]
+
+
 def _readiness_label(score: float) -> str:
     for threshold, label in _READINESS:
         if score >= threshold:
@@ -70,18 +95,34 @@ def _readiness_description(score: float) -> str:
     return _READINESS_DESCRIPTIONS.get(_readiness_label(score), "")
 
 
+def _pillar_scores(assessments: list[Any], pillar_index: int) -> list[float]:
+    """Return non-skipped scores for pillar at *pillar_index* across all assessments."""
+    return [
+        a.pillar_results[pillar_index].score
+        for a in assessments
+        if not a.pillar_results[pillar_index].skipped
+    ]
+
+
+def _print_wrapped(prefix: str, text: str, width: int = 65) -> None:
+    """Print *text* word-wrapped to *width*, indented under *prefix* after the first line."""
+    chunks = textwrap.wrap(text, width=width)
+    click.echo(prefix + (chunks[0] if chunks else ""))
+    indent = " " * len(prefix)
+    for chunk in chunks[1:]:
+        click.echo(indent + chunk)
+
+
 def _average_assessments(assessments: list[Any]) -> Any:
     """Average N AssessmentResults into one for display and threshold checks."""
-    import statistics as _stats
-
     from awaf.pillars import AssessmentResult, compute_overall_score
     from awaf.pillars.base import PillarResult
 
     last = assessments[-1]
     averaged_pillars: list[PillarResult] = []
     for i, pr in enumerate(last.pillar_results):
-        scores = [a.pillar_results[i].score for a in assessments if not a.pillar_results[i].skipped]
-        avg_score = _stats.mean(scores) if scores else pr.score
+        scores = _pillar_scores(assessments, i)
+        avg_score = statistics.mean(scores) if scores else pr.score
         averaged_pillars.append(
             PillarResult(
                 name=pr.name,
@@ -114,39 +155,35 @@ def _average_assessments(assessments: list[Any]) -> Any:
 
 def _print_variance_table(assessments: list[Any]) -> None:
     """Print mean ± std dev per pillar after multi-run assessment."""
-    import statistics as _stats
-
     click.echo()
     click.echo(f"  VARIANCE  ({len(assessments)} runs)")
     click.echo(f"  {'Pillar':<22} {'Mean':>6}  {'± Std Dev':>10}")
     click.echo("  " + "─" * 44)
     for i, pr in enumerate(assessments[0].pillar_results):
-        scores = [a.pillar_results[i].score for a in assessments if not a.pillar_results[i].skipped]
+        scores = _pillar_scores(assessments, i)
         if not scores:
             continue
-        mean = _stats.mean(scores)
-        stdev = _stats.stdev(scores) if len(scores) > 1 else 0.0
+        mean = statistics.mean(scores)
+        stdev = statistics.stdev(scores) if len(scores) > 1 else 0.0
         click.echo(f"  {pr.name:<22} {mean:>6.1f}  ±{stdev:>8.1f}")
     overall = [a.overall_score for a in assessments]
     click.echo("  " + "─" * 44)
     click.echo(
-        f"  {'Overall':<22} {_stats.mean(overall):>6.1f}  ±{_stats.stdev(overall) if len(overall) > 1 else 0.0:>8.1f}"
+        f"  {'Overall':<22} {statistics.mean(overall):>6.1f}  ±{statistics.stdev(overall) if len(overall) > 1 else 0.0:>8.1f}"
     )
 
 
 def _print_variance_chart(assessments: list[Any], out_path: str) -> None:
     """Render terminal bar chart (plotext) and optionally save PNG (matplotlib)."""
-    import statistics as _stats
-
     pillar_names = [pr.name for pr in assessments[0].pillar_results if not pr.skipped]
     means = []
     stdevs = []
     for i, pr in enumerate(assessments[0].pillar_results):
         if pr.skipped:
             continue
-        scores = [a.pillar_results[i].score for a in assessments if not a.pillar_results[i].skipped]
-        means.append(_stats.mean(scores) if scores else 0.0)
-        stdevs.append(_stats.stdev(scores) if len(scores) > 1 else 0.0)
+        scores = _pillar_scores(assessments, i)
+        means.append(statistics.mean(scores) if scores else 0.0)
+        stdevs.append(statistics.stdev(scores) if len(scores) > 1 else 0.0)
 
     # Terminal chart via plotext
     try:
@@ -189,8 +226,8 @@ def _print_variance_chart(assessments: list[Any], out_path: str) -> None:
         click.echo(f"  Variance chart saved to {png_path}")
     except ImportError:
         click.echo("  Install awaf[variance] for PNG chart output.")
-    except Exception:
-        pass
+    except Exception as exc:
+        click.echo(f"  Warning: could not save variance chart: {exc}", err=True)
 
 
 def _score_bar(score: float) -> str:
@@ -580,6 +617,7 @@ def run(
     from awaf.pricing import estimate_cost as _estimate_cost
 
     est_preflight_cost = _estimate_cost(effective_model, est_total_input, est_output_total)
+    est_total_cost = est_preflight_cost * runs
 
     click.echo("  PREFLIGHT")
     click.echo(
@@ -592,7 +630,12 @@ def run(
         f"  Total est      {est_total_input:>9,} tokens"
         f"  ({_n_pillars} pillars × ~{est_per_pillar:,})"
     )
-    click.echo(f"  Cost est            ~${est_preflight_cost:.4f}")
+    if runs > 1:
+        click.echo(
+            f"  Cost est            ~${est_preflight_cost:.4f}/run × {runs} runs = ~${est_total_cost:.4f}"
+        )
+    else:
+        click.echo(f"  Cost est            ~${est_preflight_cost:.4f}")
     click.echo(_SEP)
 
     # Auto-abort: artifacts fill too much of the context window
@@ -611,10 +654,10 @@ def run(
         click.echo("  Override: AWAF_MAX_CONTEXT_PCT=95 awaf run", err=True)
         sys.exit(2)
 
-    # Auto-abort: estimated cost already exceeds session budget — don't start the run
-    if budget_usd is not None and est_preflight_cost > budget_usd:
+    # Auto-abort: estimated cost exceeds session budget across all runs
+    if budget_usd is not None and est_total_cost > budget_usd:
         click.echo(
-            f"ERROR: estimated cost ~${est_preflight_cost:.4f} exceeds session budget"
+            f"ERROR: estimated cost ~${est_total_cost:.4f} ({runs} run(s)) exceeds session budget"
             f" ${budget_usd:.4f}. Assessment aborted.",
             err=True,
         )
@@ -753,48 +796,29 @@ def run(
     all_findings.sort(key=lambda f: _sev.get(f.get("severity", ""), 3))
 
     if all_findings:
-        import textwrap
-
         click.echo()
         click.echo("  FINDINGS  (ordered by severity)")
         for f in all_findings:
             sev = f.get("severity", "")
             pillar = f.get("pillar", "")
             detail = f.get("detail", "")
-            prefix = f"  [{sev:<8}]  {pillar:<18}  "
-            wrapped = textwrap.wrap(detail, width=65)
-            click.echo(prefix + (wrapped[0] if wrapped else ""))
-            indent = " " * len(prefix)
-            for chunk in wrapped[1:]:
-                click.echo(indent + chunk)
+            _print_wrapped(f"  [{sev:<8}]  {pillar:<18}  ", detail)
         click.echo(_SEP)
 
     if all_recs:
-        import textwrap as _tw2
-
         click.echo()
         click.echo("  RECOMMENDATIONS")
         for rec in all_recs:
             pillar = rec.get("pillar", "")
             detail = rec.get("detail", "")
-            prefix = f"  {pillar:<18}  "
-            wrapped = _tw2.wrap(detail, width=65)
-            click.echo(prefix + (wrapped[0] if wrapped else ""))
-            indent = " " * len(prefix)
-            for chunk in wrapped[1:]:
-                click.echo(indent + chunk)
+            _print_wrapped(f"  {pillar:<18}  ", detail)
         click.echo(_SEP)
 
     if all_improvements:
-        import textwrap as _tw3
-
         click.echo()
         click.echo("  TO IMPROVE THIS ASSESSMENT")
         for item in all_improvements[:3]:
-            wrapped = _tw3.wrap(item, width=68)
-            click.echo("  " + (wrapped[0] if wrapped else ""))
-            for chunk in wrapped[1:]:
-                click.echo("  " + chunk)
+            _print_wrapped("  ", item, width=68)
         click.echo(_SEP)
 
     # Persist — each run as its own DB row; multi-run rows tagged with note
@@ -872,7 +896,7 @@ def run(
     tier2_scores = [
         r.score
         for r in assessment.pillar_results
-        if r.name in {"Reasoning Integ.", "Controllability", "Context Integrity"} and not r.skipped
+        if r.name in _TIER2_PILLAR_NAMES and not r.skipped
     ]
     tier2_avg = sum(tier2_scores) / len(tier2_scores) if tier2_scores else 100.0
 
@@ -909,6 +933,7 @@ def run(
 def _pillar_table_lines(assessment: object) -> list[str]:
     """Build a bordered table of pillar scores. Returns lines without trailing newlines."""
     from awaf.pillars import AssessmentResult
+    from awaf.pillars.base import PillarResult
 
     assert isinstance(assessment, AssessmentResult)
 
@@ -954,67 +979,39 @@ def _pillar_table_lines(assessment: object) -> list[str]:
 
     rows: list[str] = [top, hdr]
 
-    def _r_score(r: object) -> float | None:
-        from awaf.pillars.base import PillarResult as _PR
-
-        assert isinstance(r, _PR)
+    def _r_score(r: PillarResult) -> float | None:
         return None if (r.skipped or r.not_applicable) else r.score
 
-    def _r_conf(r: object) -> str | None:
-        from awaf.pillars.base import PillarResult as _PR
-
-        assert isinstance(r, _PR)
+    def _r_conf(r: PillarResult) -> str | None:
         if r.not_applicable:
             return "n/a"
         return None if r.skipped else r.confidence
 
-    # Tier 0
     rows.append(tsep)
     rows.append(hrow("TIER 0 — FOUNDATION"))
     rows.append(mid)
     for r in assessment.pillar_results:
         if r.name == "Foundation":
-            from awaf.pillars.base import PillarResult as _PR
-
-            assert isinstance(r, _PR)
-            if r.not_applicable:
-                st = "N/A"
-            else:
-                st = "PASS" if (r.score is not None and r.score >= 40) else "FAIL"
+            st = (
+                "N/A"
+                if r.not_applicable
+                else ("PASS" if (r.score is not None and r.score >= 40) else "FAIL")
+            )
             rows.append(drow(r.name, _r_score(r), _r_conf(r), st))
 
-    # Tier 1
-    tier1 = {
-        "Op. Excellence",
-        "Security",
-        "Reliability",
-        "Performance",
-        "Cost Optim.",
-        "Sustainability",
-    }
     rows.append(tsep)
     rows.append(hrow("TIER 1 — CLOUD WAF ADAPTED"))
     rows.append(mid)
     for r in assessment.pillar_results:
-        if r.name in tier1:
-            from awaf.pillars.base import PillarResult as _PR2
+        if r.name in _TIER1_PILLAR_NAMES:
+            rows.append(drow(r.name, _r_score(r), _r_conf(r), "!" if r.suspect else ""))
 
-            assert isinstance(r, _PR2)
-            st = "!" if r.suspect else ""
-            rows.append(drow(r.name, _r_score(r), _r_conf(r), st))
-
-    # Tier 2
     rows.append(tsep)
     rows.append(hrow("TIER 2 — AGENT-NATIVE  (1.5x weight)"))
     rows.append(mid)
-    tier2 = {"Reasoning Integ.", "Controllability", "Context Integrity"}
     for r in assessment.pillar_results:
-        if r.name in tier2:
-            from awaf.pillars.base import PillarResult as _PR3
-
-            assert isinstance(r, _PR3)
-            st = "! 1.5x" if r.suspect else "1.5x"
-            rows.append(drow(r.name, _r_score(r), _r_conf(r), st))
+        if r.name in _TIER2_PILLAR_NAMES:
+            rows.append(drow(r.name, _r_score(r), _r_conf(r), "! 1.5x" if r.suspect else "1.5x"))
 
     rows.append(bot)
     return rows
@@ -1051,7 +1048,7 @@ def _any_agent_files_changed(patterns: list[str]) -> bool:
 
 
 def _today() -> str:
-    from datetime import UTC, datetime
+    from datetime import datetime
 
     return datetime.now(UTC).strftime("%Y-%m-%d")
 
@@ -1156,19 +1153,6 @@ def compare(id1: int, id2: int) -> None:
         click.echo(f"Assessment {id2} not found.", err=True)
         sys.exit(1)
 
-    _PILLAR_FIELDS = [
-        ("Foundation", "foundation_score"),
-        ("Op. Excellence", "op_excellence_score"),
-        ("Security", "security_score"),
-        ("Reliability", "reliability_score"),
-        ("Performance", "performance_score"),
-        ("Cost Optim.", "cost_score"),
-        ("Sustainability", "sustainability_score"),
-        ("Reasoning Integ.", "reasoning_score"),
-        ("Controllability", "controllability_score"),
-        ("Context Integrity", "context_integrity_score"),
-    ]
-
     click.echo(f"\nCompare #{id1} vs #{id2}")
     click.echo(_SEP)
     click.echo(f"  {'':20}  #{id1:>4}   #{id2:>4}   delta")
@@ -1176,9 +1160,9 @@ def compare(id1: int, id2: int) -> None:
         f"  {'Overall':<20}  {int(rec1.overall_score):>4}   {int(rec2.overall_score):>4}   "
         f"{_fmt_delta(rec2.overall_score - rec1.overall_score)}"
     )
-    for label, field in _PILLAR_FIELDS:
-        s1 = getattr(rec1, field)
-        s2 = getattr(rec2, field)
+    for label, score_attr, _, _is_t2 in _PILLAR_ROWS:
+        s1 = getattr(rec1, score_attr)
+        s2 = getattr(rec2, score_attr)
         if s1 is None and s2 is None:
             continue
         s1_str = f"{int(s1):>4}" if s1 is not None else "   —"
@@ -1242,20 +1226,6 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
         click.echo(_json.dumps(data, indent=2))
         return
 
-    # Pillar rows: (display_label, score_attr, confidence_attr, is_tier2)
-    pillar_rows: list[tuple[str, str | None, str | None, bool]] = [
-        ("Foundation", "foundation_score", "foundation_confidence", False),
-        ("Op. Excellence", "op_excellence_score", "op_excellence_confidence", False),
-        ("Security", "security_score", "security_confidence", False),
-        ("Reliability", "reliability_score", "reliability_confidence", False),
-        ("Performance", "performance_score", "performance_confidence", False),
-        ("Cost Optim.", "cost_score", "cost_confidence", False),
-        ("Sustainability", "sustainability_score", "sustainability_confidence", False),
-        ("Reasoning Integ.", "reasoning_score", "reasoning_confidence", True),
-        ("Controllability", "controllability_score", "controllability_confidence", True),
-        ("Context Integrity", "context_integrity_score", "context_integrity_confidence", True),
-    ]
-
     click.echo(f"\nAWAF Assessment: {rec.project_name or project_name}")
     click.echo(f"AWAF v1.0  |  {rec.created_at.strftime('%Y-%m-%d')}")
     click.echo(_SEP)
@@ -1266,19 +1236,19 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
 
     # TIER 0
     click.echo("  TIER 0: FOUNDATION")
-    row = pillar_rows[0]
+    row = _PILLAR_ROWS[0]
     _print_pillar_row(rec, row[0], row[1], row[2], is_foundation=True)
 
     # TIER 1
     click.echo()
     click.echo("  TIER 1: CLOUD WAF ADAPTED")
-    for label, score_attr, conf_attr, _ in pillar_rows[1:7]:
+    for label, score_attr, conf_attr, _ in _PILLAR_ROWS[1:7]:
         _print_pillar_row(rec, label, score_attr, conf_attr)
 
     # TIER 2
     click.echo()
     click.echo("  TIER 2: AGENT-NATIVE  (1.5x weight)")
-    for label, score_attr, conf_attr, _ in pillar_rows[7:]:
+    for label, score_attr, conf_attr, _ in _PILLAR_ROWS[7:]:
         _print_pillar_row(rec, label, score_attr, conf_attr)
 
     click.echo()
@@ -1316,18 +1286,11 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
         click.echo()
         click.echo("  FINDINGS  (ordered by severity)")
         if findings:
-            import textwrap as _tw
-
             for f in findings:
                 pillar = f.get("pillar", "")
                 severity = f.get("severity", "")
                 detail = f.get("detail", "")
-                prefix = f"  [{severity:<8}]  {pillar:<18}  "
-                wrapped = _tw.wrap(detail, width=65)
-                click.echo(prefix + (wrapped[0] if wrapped else ""))
-                indent = " " * len(prefix)
-                for chunk in wrapped[1:]:
-                    click.echo(indent + chunk)
+                _print_wrapped(f"  [{severity:<8}]  {pillar:<18}  ", detail)
         else:
             click.echo("  — (no findings recorded)")
 
@@ -1411,7 +1374,6 @@ def _write_artifact(
 ) -> None:
     """Write a plain-text artifact report to *path*."""
     import datetime
-    import textwrap as _tw
 
     from awaf.pillars import AssessmentResult
 
@@ -1431,7 +1393,7 @@ def _write_artifact(
 
     def _awrap(text: str, width: int = 78, indent: str = "  ") -> list[str]:
         """Wrap *text* to *width*, returning lines all prefixed by *indent*."""
-        wrapped = _tw.wrap(text, width=width - len(indent))
+        wrapped = textwrap.wrap(text, width=width - len(indent))
         return [(indent + line) for line in wrapped] if wrapped else [indent]
 
     assert isinstance(assessment, AssessmentResult)
@@ -1463,15 +1425,6 @@ def _write_artifact(
     a(SEP_MINOR)
 
     # Pillar table — plain ASCII for file portability
-    tier1_names = {
-        "Op. Excellence",
-        "Security",
-        "Reliability",
-        "Performance",
-        "Cost Optim.",
-        "Sustainability",
-    }
-    tier2_names = {"Reasoning Integ.", "Controllability", "Context Integrity"}
     CP, CS, CB, CC, CT = 20, 8, 12, 12, 7
 
     def _atbl_sep(ch: str = "-", jn: str = "+") -> str:
@@ -1516,13 +1469,13 @@ def _write_artifact(
     a(_atbl_hrow("TIER 1 -- CLOUD WAF ADAPTED"))
     a(_atbl_sep())
     for r in assessment.pillar_results:
-        if r.name in tier1_names:
+        if r.name in _TIER1_PILLAR_NAMES:
             a(_atbl_row(r.name, r.score, r.confidence))
     a(_atbl_sep("="))
     a(_atbl_hrow("TIER 2 -- AGENT-NATIVE (1.5x weight)"))
     a(_atbl_sep())
     for r in assessment.pillar_results:
-        if r.name in tier2_names:
+        if r.name in _TIER2_PILLAR_NAMES:
             a(_atbl_row(r.name, r.score, r.confidence, "1.5x"))
     a(_atbl_sep("="))
     a("")
@@ -1549,7 +1502,7 @@ def _write_artifact(
             pillar = f.get("pillar", "")
             detail = _asc(f.get("detail", ""))
             prefix = f"  [{sev:<8}]  {pillar:<18}  "
-            wrapped = _tw.wrap(detail, width=78 - len(prefix))
+            wrapped = textwrap.wrap(detail, width=78 - len(prefix))
             a(prefix + (wrapped[0] if wrapped else ""))
             cont = " " * len(prefix)
             for chunk in wrapped[1:]:
@@ -1564,7 +1517,7 @@ def _write_artifact(
             pillar = rec.get("pillar", "")
             detail = _asc(rec.get("detail", ""))
             prefix = f"  {pillar:<20}  "
-            wrapped = _tw.wrap(detail, width=78 - len(prefix))
+            wrapped = textwrap.wrap(detail, width=78 - len(prefix))
             a(prefix + (wrapped[0] if wrapped else ""))
             cont = " " * len(prefix)
             for chunk in wrapped[1:]:

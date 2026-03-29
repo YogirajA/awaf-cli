@@ -21,6 +21,7 @@ class AzureOpenAIProvider(LLMProvider):
 
     def __init__(self, config: ProviderConfig) -> None:
         super().__init__(config)
+        self._client: object = None  # lazy-initialised on first use
 
     # ------------------------------------------------------------------
     # LLMProvider interface
@@ -76,11 +77,13 @@ class AzureOpenAIProvider(LLMProvider):
         if artifact_content:
             sep = chr(10) + chr(10)
             user_prompt = artifact_content + sep + user_prompt
-        client = openai.AzureOpenAI(
-            api_key=self.config.api_key,
-            azure_endpoint=self.config.azure_endpoint or "",
-            api_version=self.config.azure_api_version,
-        )
+        if self._client is None:
+            self._client = openai.AzureOpenAI(
+                api_key=self.config.api_key,
+                azure_endpoint=self.config.azure_endpoint or "",
+                api_version=self.config.azure_api_version,
+            )
+        client: openai.AzureOpenAI = self._client  # type: ignore[assignment]
 
         # Azure requires deployment name for the API call; config.model is display-only
         deployment = self.config.azure_deployment or ""

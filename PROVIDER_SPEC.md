@@ -44,7 +44,7 @@ class ProviderConfig:
     provider_name: str                        # "anthropic" | "openai" | "azure" | "google" | "litellm"
     model: str                                # full model string, e.g. "gpt-4o", "claude-opus-4-5"
     api_key: str                              # resolved from env var
-    max_tokens: int = 4096
+    max_tokens: int = 2048
     temperature: float = 0.0                  # deterministic by default
     timeout_seconds: int = 120
     max_retries: int = 3
@@ -129,6 +129,22 @@ class LLMProvider(ABC):
         """
         ...
 ```
+
+**Client caching pattern:** All adapters must lazy-initialize the SDK client on the first `complete()` call and reuse it across subsequent calls:
+
+```python
+def __init__(self, config: ProviderConfig) -> None:
+    super().__init__(config)
+    self._client: object = None  # lazy-initialised on first use
+
+def complete(self, ...) -> ProviderResponse:
+    if self._client is None:
+        self._client = ProviderSDK(api_key=self.config.api_key)
+    client: ProviderSDK = self._client  # type: ignore[assignment]
+    ...
+```
+
+This preserves HTTP connection pools across the 10 sequential pillar calls, avoiding the overhead of new TLS handshakes per call.
 
 ---
 
@@ -227,7 +243,7 @@ def list_providers() -> list[str]:
 - Use `anthropic.Anthropic(api_key=config.api_key)`
 - Call `client.messages.create()` with `model`, `max_tokens`, `temperature`, `system`, `messages`
 - Map `response.usage.input_tokens` and `response.usage.output_tokens` to `ProviderResponse`
-- Token counting: use `client.beta.messages.count_tokens()` or tiktoken fallback
+- Token counting: uses `len(text) // 4` heuristic by default (avoids API round-trips during ingest). Set `AWAF_EXACT_TOKEN_COUNT=1` to use `client.beta.messages.count_tokens()` for exact counts.
 - `default_model`: `"claude-haiku-4-5-20251001"` (50K TPM on Tier 1; ~20x cheaper than Opus)
 - `supports_system_prompt`: `True`
 - Prompt caching: add `cache_control: {"type": "ephemeral"}` to both system and user content blocks; pass `extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}`. Cache tokens (`cache_creation_input_tokens`, `cache_read_input_tokens`) must be included in `ProviderResponse.input_tokens` (use `getattr` with default 0 for SDK compatibility).
@@ -278,13 +294,12 @@ def list_providers() -> list[str]:
 
 ### `google.py`
 
-**SDK:** `google-generativeai`
+**SDK:** `google-genai` (`google.genai`)
 
 **Required behavior:**
-- Use `genai.configure(api_key=config.api_key)` then `genai.GenerativeModel(config.model)`
-- System prompt: pass via `system_instruction` parameter in `GenerativeModel()`
-- Call `model.generate_content(user_prompt, generation_config={"temperature": config.temperature, "max_output_tokens": config.max_tokens})`
-- Token counting: use `model.count_tokens(text).total_tokens`
+- Use `genai.Client(api_key=config.api_key)`
+- Call `client.models.generate_content()` with `model`, `contents`, and `types.GenerateContentConfig(system_instruction, temperature, max_output_tokens)`
+- Token counting: uses `len(text) // 4` heuristic by default. Set `AWAF_EXACT_TOKEN_COUNT=1` to use `client.models.count_tokens()` for exact counts.
 - Map response: `response.usage_metadata.prompt_token_count` → `input_tokens`, `candidates_token_count` → `output_tokens`
 - `default_model`: `"gemini-2.0-flash"`
 - `supports_system_prompt`: `True`

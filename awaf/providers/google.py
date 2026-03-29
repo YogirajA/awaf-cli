@@ -19,6 +19,7 @@ class GoogleProvider(LLMProvider):
 
     def __init__(self, config: ProviderConfig) -> None:
         super().__init__(config)
+        self._client: object = None  # lazy-initialised on first use
 
     # ------------------------------------------------------------------
     # LLMProvider interface
@@ -61,7 +62,9 @@ class GoogleProvider(LLMProvider):
         if artifact_content:
             sep = chr(10) + chr(10)
             user_prompt = artifact_content + sep + user_prompt
-        client = genai.Client(api_key=self.config.api_key)
+        if self._client is None:
+            self._client = genai.Client(api_key=self.config.api_key)
+        client: genai.Client = self._client  # type: ignore[assignment]
         model_name = self.config.model or self.default_model
 
         t0 = time.monotonic()
@@ -96,10 +99,18 @@ class GoogleProvider(LLMProvider):
         )
 
     def count_tokens(self, text: str) -> int:
+        # Heuristic avoids API round-trips per file during ingest.
+        # Set AWAF_EXACT_TOKEN_COUNT=1 to use the Google count_tokens API.
+        import os
+
+        if not os.environ.get("AWAF_EXACT_TOKEN_COUNT"):
+            return max(1, len(text) // 4)
         try:
             from google import genai
 
-            client = genai.Client(api_key=self.config.api_key)
+            if self._client is None:
+                self._client = genai.Client(api_key=self.config.api_key)
+            client: genai.Client = self._client  # type: ignore[assignment]
             model_name = self.config.model or self.default_model
             result = client.models.count_tokens(model=model_name, contents=text)
             return int(result.total_tokens or 0)
