@@ -505,7 +505,7 @@ The local mode is fully functional with no account required. Cloud and on-prem a
 ## Score Badge
 
 ```markdown
-[![AWAF Score](https://img.shields.io/badge/AWAF%20Score-98%20Production%20Ready-16A34A?style=flat-square)](https://github.com/YogirajA/AWAF)
+[![AWAF Score](https://img.shields.io/badge/AWAF%20Score-94%20Production%20Ready-16A34A?style=flat-square)](https://github.com/YogirajA/AWAF)
 ```
 
 Update the score and label after each `awaf run` to reflect your latest result.
