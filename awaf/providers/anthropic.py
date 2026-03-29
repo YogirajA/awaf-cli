@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import time
+from typing import Any
 
 from awaf.providers.base import (
     LLMProvider,
@@ -66,43 +67,36 @@ class AnthropicProvider(LLMProvider):
 
         t0 = time.monotonic()
         try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=self.config.max_tokens,
-                temperature=self.config.temperature,
-                # Cache the system prompt (pillar criteria) — helps on repeated runs
-                system=[
+            # Artifact goes first in system as a cached block — cache key is just the
+            # artifact content, shared across all 10 pillar calls. Pillar criteria come
+            # second (uncached) so each pillar's different prompt doesn't break the key.
+            # Without artifact: fall back to caching the system prompt directly.
+            if artifact_content:
+                system_blocks: list[Any] = [
+                    {
+                        "type": "text",
+                        "text": artifact_content,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                    },
+                ]
+            else:
+                system_blocks = [
                     {
                         "type": "text",
                         "text": system_prompt,
                         "cache_control": {"type": "ephemeral"},
                     }
-                ],
-                # When artifact_content is provided it becomes its own cached block so all
-                # 10 pillar calls share one cache key. user_prompt is the small pillar question.
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            [
-                                {
-                                    "type": "text",
-                                    "text": artifact_content,
-                                    "cache_control": {"type": "ephemeral"},
-                                },
-                                {"type": "text", "text": user_prompt},
-                            ]
-                            if artifact_content
-                            else [
-                                {
-                                    "type": "text",
-                                    "text": user_prompt,
-                                    "cache_control": {"type": "ephemeral"},
-                                }
-                            ]
-                        ),
-                    }
-                ],
+                ]
+            response = client.messages.create(
+                model=model,
+                max_tokens=self.config.max_tokens,
+                temperature=self.config.temperature,
+                system=system_blocks,
+                messages=[{"role": "user", "content": user_prompt}],
                 extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
             )
         except anthropic.APIStatusError as exc:
@@ -144,8 +138,8 @@ class AnthropicProvider(LLMProvider):
         ]
         content = text_blocks[0].text if text_blocks else ""
 
-        # Sum all input token types: regular + cache-creation + cache-read.
-        # cache_creation/read are not present on older SDK versions → default 0.
+        # Preserve cache token counts separately for accurate cost estimation.
+        # cache_creation/read not present on older SDK versions → default 0.
         cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
         cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
         total_input = response.usage.input_tokens + cache_create + cache_read
@@ -157,6 +151,8 @@ class AnthropicProvider(LLMProvider):
             model=response.model,
             provider=self.config.provider_name,
             latency_ms=latency_ms,
+            cache_creation_input_tokens=cache_create,
+            cache_read_input_tokens=cache_read,
             raw=response.model_dump(),
         )
 

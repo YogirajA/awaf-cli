@@ -605,9 +605,11 @@ def run(
 
     # Preflight token estimation — always shown (useful in CI logs), auto-aborts on overflow
     from awaf.pillars import ALL_AGENTS as _all_agents
-    from awaf.pricing import CONTEXT_WINDOW, FALLBACK_CONTEXT_WINDOW
+    from awaf.pricing import CONTEXT_WINDOW, FALLBACK_CONTEXT_WINDOW, normalize_model
 
-    ctx_window = CONTEXT_WINDOW.get(effective_model, FALLBACK_CONTEXT_WINDOW)
+    ctx_window = CONTEXT_WINDOW.get(effective_model) or CONTEXT_WINDOW.get(
+        normalize_model(effective_model), FALLBACK_CONTEXT_WINDOW
+    )
     _est_system = 900  # conservative system+user prompt overhead per pillar call
     _n_pillars = len([a for a in _all_agents if pillar is None or pillar.lower() in a.name.lower()])
     est_per_pillar = ingest_result.total_tokens + _est_system

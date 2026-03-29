@@ -29,6 +29,8 @@ class PillarResult:
     improve_suggestions: list[str] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
     skipped: bool = False
     skip_reason: str = ""
     not_applicable: bool = False
@@ -145,8 +147,7 @@ class PillarAgent(ABC):
         if "haiku" in model.lower():
             system = system + _HAIKU_SUFFIX
 
-        # Small pillar-specific question -- artifact passed separately for caching
-        user_prompt = f"Evaluate the above artifacts against the {self.name} pillar."
+        user_prompt = f"Evaluate the provided artifacts against the {self.name} pillar."
 
         response = with_retry(
             provider,
@@ -159,6 +160,8 @@ class PillarAgent(ABC):
         result = self._parse_response(response.content)
         result.input_tokens = response.input_tokens
         result.output_tokens = response.output_tokens
+        result.cache_creation_input_tokens = response.cache_creation_input_tokens
+        result.cache_read_input_tokens = response.cache_read_input_tokens
         return result
 
     def _parse_response(self, raw: str) -> PillarResult:
