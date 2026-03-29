@@ -482,6 +482,10 @@ AWAF_LOG_LEVEL=INFO
 # Cached tokens do not count against the input TPM rate limit, reducing pressure
 # on Tier 1 plans (50K TPM for Haiku, 30K TPM for Sonnet/Opus).
 # Cache TTL is ~5 minutes; repeated runs within that window benefit most.
+
+# Token counting (Anthropic and Google)
+AWAF_EXACT_TOKEN_COUNT=1    # use provider API for exact token counts during ingest
+                             # (1 API call per file; default: fast heuristic len(text)//4)
 ```
 
 ---

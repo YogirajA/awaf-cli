@@ -34,6 +34,7 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(self, config: ProviderConfig) -> None:
         super().__init__(config)
+        self._client: object = None  # lazy-initialised on first use
 
     # ------------------------------------------------------------------
     # LLMProvider interface
@@ -75,7 +76,9 @@ class OpenAIProvider(LLMProvider):
         if artifact_content:
             sep = chr(10) + chr(10)
             user_prompt = artifact_content + sep + user_prompt
-        client = openai.OpenAI(api_key=self.config.api_key)
+        if self._client is None:
+            self._client = openai.OpenAI(api_key=self.config.api_key)
+        client: openai.OpenAI = self._client  # type: ignore[assignment]
         model = _normalize_model(self.config.model or self.default_model)
 
         t0 = time.monotonic()

@@ -14,7 +14,7 @@ class ProviderConfig:
     provider_name: str  # "anthropic" | "openai" | "azure" | "google" | "litellm"
     model: str  # full model string, e.g. "gpt-4o", "claude-opus-4-5"
     api_key: str  # resolved from env var
-    max_tokens: int = 4096
+    max_tokens: int = 2048
     temperature: float = 0.0
     timeout_seconds: int = 120
     max_retries: int = 3

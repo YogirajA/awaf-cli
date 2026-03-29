@@ -7,7 +7,15 @@
       "Bash(python3 -m uv run ruff format --check .)",
       "Bash(python3 -m uv run ruff check .)",
       "Bash(python3 -m uv run pytest tests/ -m \"not integration\" -x)",
-      "Bash(gh repo view YogirajA/awaf-skill --json description,readme,defaultBranchRef)"
+      "Bash(gh repo view YogirajA/awaf-skill --json description,readme,defaultBranchRef)",
+      "Bash(python3 -m uv run pytest tests/ -m \"not integration\" -x -q)",
+      "Bash(python3 -m uv run ruff format .)",
+      "Bash(python3 -m uv run ruff check --fix .)",
+      "Bash(wc -l /c/Code/awaf/awaf-cli/awaf/pillars/base.py /c/Code/awaf/awaf-cli/awaf/pillars/*.py)",
+      "Bash(grep -n \"_SCORING_GUIDE\\\\|_CONFIDENCE_GUIDE\\\\|_RULES\\\\|_JSON_SCHEMA\" /c/Code/awaf/awaf-cli/awaf/pillars/*.py)",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(grep -n \"max_tokens\\\\|4096\" /c/Code/awaf/awaf-cli/awaf/providers/*.py)",
+      "Bash(python3 -m uv run pytest tests/ -m \"not integration\" -q)"
     ]
   }
 }

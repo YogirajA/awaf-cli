@@ -20,6 +20,7 @@ class AnthropicProvider(LLMProvider):
 
     def __init__(self, config: ProviderConfig) -> None:
         super().__init__(config)
+        self._client: object = None  # lazy-initialised on first use
 
     # ------------------------------------------------------------------
     # LLMProvider interface
@@ -58,7 +59,9 @@ class AnthropicProvider(LLMProvider):
     ) -> ProviderResponse:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=self.config.api_key)
+        if self._client is None:
+            self._client = anthropic.Anthropic(api_key=self.config.api_key)
+        client: anthropic.Anthropic = self._client  # type: ignore[assignment]
         model = self.config.model or self.default_model
 
         t0 = time.monotonic()
@@ -158,10 +161,19 @@ class AnthropicProvider(LLMProvider):
         )
 
     def count_tokens(self, text: str) -> int:
+        # Heuristic (~4 chars/token) is accurate enough for budget decisions and
+        # avoids a live API round-trip per file during ingest (100+ calls otherwise).
+        # Set AWAF_EXACT_TOKEN_COUNT=1 to use the Anthropic count_tokens API instead.
+        import os
+
+        if not os.environ.get("AWAF_EXACT_TOKEN_COUNT"):
+            return max(1, len(text) // 4)
         try:
             import anthropic
 
-            client = anthropic.Anthropic(api_key=self.config.api_key)
+            if self._client is None:
+                self._client = anthropic.Anthropic(api_key=self.config.api_key)
+            client: anthropic.Anthropic = self._client  # type: ignore[assignment]
             model = self.config.model or self.default_model
             result = client.beta.messages.count_tokens(
                 model=model,
@@ -169,5 +181,4 @@ class AnthropicProvider(LLMProvider):
             )
             return result.input_tokens
         except Exception:
-            # Fallback: ~4 chars per token
             return max(1, len(text) // 4)
