@@ -444,14 +444,6 @@ def run(
     from awaf.pillars import run_assessment
     from awaf.pricing import estimate_cost
 
-    # Resolve --out default: place report inside the scanned directory when there is
-    # exactly one path argument and it is a directory; otherwise fall back to CWD.
-    if out is None:
-        if len(paths) == 1 and os.path.isdir(paths[0]):
-            out = os.path.join(paths[0], "awaf-report.txt")
-        else:
-            out = "awaf-report.txt"
-
     toml_data = _read_toml()
     project_name = _project_name(toml_data) or os.path.basename(os.getcwd())
     toml_thresholds = toml_data.get("thresholds", {})
@@ -561,6 +553,15 @@ def run(
 
     _toml_paths = toml_data.get("files", {}).get("paths", [])
     scan_paths = list(paths) if paths else (_toml_paths if _toml_paths else ["."])
+
+    # Resolve --out default after scan_paths is known: place report inside the scanned
+    # directory when there is exactly one directory target; otherwise fall back to CWD.
+    if out is None:
+        if len(scan_paths) == 1 and os.path.isdir(scan_paths[0]):
+            out = os.path.join(scan_paths[0], "awaf-report.txt")
+        else:
+            out = "awaf-report.txt"
+
     budget_usd: float | None = None
     raw_budget = os.environ.get("AWAF_SESSION_BUDGET_USD")
     if raw_budget:
