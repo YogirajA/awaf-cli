@@ -1,0 +1,763 @@
+   _      _  _  _    _      ___  
+  /_\    | || || |  /_\    | __| 
+ / _ \   | \/ \/ | / _ \   | _|  
+/_/ \_\   \_/\_/  /_/ \_\  |_        Agent Well-Architected Framework
+
+AWAF Assessment: awaf-cli
+AWAF v1.0 | 2026-03-29 | anthropic / claude-haiku-4-5-20251001
+========================================
+
+Overall Score: 4/100 -- Not Ready
+Critical gaps across multiple pillars. Major rework required.
+
+Scale: Production Ready 85-100 | Near Ready 70-84 | Needs Work 50-69
+       High Risk 25-49 | Not Ready 0-24
+Foundation <40 = automatic FAIL. Tier 2 pillars carry 1.5x weight.
+
+----------------------------------------
++======================+==========+==============+==============+=========+
+| Pillar               | Score    | Progress     | Confidence   |  Status |
++======================+==========+==============+==============+=========+
+| TIER 0 -- FOUNDATION                                                    |
++----------------------+----------+--------------+--------------+---------+
+| Foundation           | 6/100    | [#         ] | verified     |    FAIL |
++======================+==========+==============+==============+=========+
+| TIER 1 -- CLOUD WAF ADAPTED                                             |
++----------------------+----------+--------------+--------------+---------+
+| Op. Excellence       | 0/100    | [          ] | verified     |         |
+| Security             | 14/100   | [#         ] | verified     |         |
+| Reliability          | 0/100    | [          ] | verified     |         |
+| Performance          | 0/100    | [          ] | verified     |         |
+| Cost Optim.          | 23/100   | [##        ] | verified     |         |
+| Sustainability       | 0/100    | [          ] | verified     |         |
++======================+==========+==============+==============+=========+
+| TIER 2 -- AGENT-NATIVE (1.5x weight)                                    |
++----------------------+----------+--------------+--------------+---------+
+| Reasoning Integ.     | 0/100    | [          ] | verified     |    1.5x |
+| Controllability      | 0/100    | [          ] | verified     |    1.5x |
+| Context Integrity    | 5/100    | [          ] | verified     |    1.5x |
++======================+==========+==============+==============+=========+
+
+----------------------------------------
+FILES ANALYZED: 3 files
+
+----------------------------------------
+FINDINGS (ordered by severity)
+  [Critical]  Foundation          Hard structural dependency on session-
+                                  service at startup. agent.py line 30-33:
+                                  load_session_context() calls sys.exit(1) on
+                                  any failure (network, timeout, 404, auth).
+                                  Agent cannot boot without external service.
+                                  No fallback context, no degraded mode, no
+                                  default preferences. This is a Foundation
+                                  Fail -- the agent does not own its domain
+                                  end-to-end.
+  [Critical]  Foundation          Agent owns no persistent state. agent.py
+                                  line 13: conversation history is a module-
+                                  level list in process memory. Restart loses
+                                  all context. Session preferences are fetched
+                                  at runtime from session-service (line 18-24)
+                                  and not cached. Agent cannot function as an
+                                  autonomous slice.
+  [Critical]  Foundation          Blast radius uncontained. Failure of
+                                  session-service at http://session-
+                                  service:8080 (agent.py line 20) causes
+                                  immediate agent failure. No circuit breaker,
+                                  no timeout, no fallback. A single upstream
+                                  service outage takes down the agent
+                                  completely.
+  [Critical]  Op. Excellence      No SLOs defined. Agent has no latency
+                                  targets, success rate thresholds, or cost
+                                  budgets. Production impact: no basis for
+                                  alerting, no way to detect degradation.
+                                  Evidence: AWAF_SCORE.md notes 'No SLOs'
+                                  under Op. Excellence; agent.py has no
+                                  instrumentation.
+  [Critical]  Op. Excellence      No runbooks for failure modes. Agent fails
+                                  hard on session-service unavailability
+                                  (sys.exit(1)), Anthropic API timeouts, and
+                                  unbounded context growth. No documented
+                                  recovery procedures. Evidence: agent.py
+                                  lines 24-26 (sys.exit on load failure); no
+                                  runbook artifacts provided.
+  [Critical]  Op. Excellence      No structured logging. Agent uses print() to
+                                  stderr only (agent.py lines 48, 52). No
+                                  session_id, request_id, timestamp, or log
+                                  level. Debugging a production failure
+                                  requires manual reproduction. Evidence:
+                                  agent.py lines 48, 52; README.md silent on
+                                  observability.
+  [Critical]  Op. Excellence      No alerting configured. No PagerDuty,
+                                  CloudWatch, Datadog, or OpsGenie
+                                  integration. Error rates, latency spikes,
+                                  and budget overruns go undetected. Evidence:
+                                  no alerting config files; AWAF_SCORE.md
+                                  notes 'no alerting'.
+  [Critical]  Security            User questions flow directly into LLM prompt
+                                  without sanitization. Malicious input
+                                  (prompt injection, jailbreak attempts) is
+                                  not validated or escaped before being
+                                  appended to history and sent to Claude
+                                  (agent.py line 35: history.append({'role':
+                                  'user', 'content': question})). An attacker
+                                  can craft questions to override system
+                                  instructions or extract sensitive context.
+  [Critical]  Security            Session service called over unencrypted HTTP
+                                  with authentication token in header.
+                                  INTERNAL_TOKEN is transmitted in plaintext
+                                  and visible to any network observer
+                                  (agent.py line 25: http://session-
+                                  service:8080). Token compromise enables
+                                  unauthorized session access.
+  [Critical]  Security            No kill switch or emergency stop mechanism
+                                  in code. Agent runs indefinitely until
+                                  Ctrl+C; no SIGTERM handler, no programmatic
+                                  flag to halt execution, no timeout on
+                                  blocking calls. A runaway loop or hung
+                                  dependency cannot be terminated remotely
+                                  (agent.py lines 58-60).
+  [Critical]  Reliability         Hard structural dependency on session-
+                                  service with no fallback. agent.py line 34
+                                  calls sys.exit(1) if session service is
+                                  unreachable at startup. No degraded mode, no
+                                  default context, no circuit breaker. Single
+                                  upstream failure terminates the entire
+                                  agent.
+  [Critical]  Reliability         No timeout on external HTTP calls. agent.py
+                                  line 13 requests.get() has no timeout
+                                  parameter; will hang indefinitely if
+                                  session-service is slow or unresponsive.
+                                  Same risk on Anthropic SDK call (line 27) --
+                                  no timeout on CLIENT.messages.create().
+  [Critical]  Reliability         Unbounded context growth with no overflow
+                                  detection. agent.py line 20 appends to
+                                  history list without cap; no check before
+                                  sending to API. Long sessions will exceed
+                                  context window, causing silent truncation or
+                                  API errors.
+  [Critical]  Performance         Model selection is static and unconditional.
+                                  agent.py line 13 sets MODEL = 'claude-
+                                  opus-4-6' globally; ask() function (line 20)
+                                  always uses this model regardless of
+                                  question complexity. Simple factual queries
+                                  (e.g., 'What is 2+2?') consume the same
+                                  token budget and latency as complex
+                                  reasoning tasks. No routing logic, no cost-
+                                  aware fallback to claude-haiku or claude-
+                                  sonnet.
+  [Critical]  Performance         Context window overflow guaranteed. agent.py
+                                  line 24 appends every user question and
+                                  assistant response to the unbounded history
+                                  list. No pruning, no sliding window, no
+                                  summarization. Long sessions will exceed
+                                  claude-opus-4-6's context limit (200k
+                                  tokens) and either fail or silently truncate
+                                  early turns, degrading reasoning quality.
+  [Critical]  Cost Optim.         No session budget enforced. Agent has no
+                                  `SESSION_TOKEN_LIMIT` or spend cap; while
+                                  loop in main() (agent.py:60-67) will
+                                  continue indefinitely, consuming tokens at
+                                  ~$0.015 per 1K input tokens (Opus 4.6). A
+                                  user can exhaust $100+ in a single session
+                                  without warning.
+  [Critical]  Cost Optim.         No loop detection. Main loop
+                                  (agent.py:60-67) has no iteration counter,
+                                  timeout, or max-turn guard. Pathological
+                                  input (e.g., user repeatedly asking
+                                  identical questions) will accumulate
+                                  unbounded history and trigger context window
+                                  overflow, forcing expensive re-prompting or
+                                  failure.
+  [Critical]  Sustainability      Agent always uses claude-opus-4-6 (most
+                                  capable, highest cost model) for all queries
+                                  regardless of complexity. A simple factual
+                                  lookup or clarification question incurs the
+                                  same token cost as a complex reasoning task.
+                                  agent.py line 13 hardcodes MODEL = 'claude-
+                                  opus-4-6' with no conditional logic.
+  [Critical]  Reasoning Integ.    No eval framework present. Agent has no
+                                  automated tests for reasoning accuracy, tool
+                                  selection, or hallucination detection. ask()
+                                  in agent.py returns LLM output directly
+                                  without validation or uncertainty
+                                  quantification.
+  [Critical]  Reasoning Integ.    No reasoning trace or chain-of-thought
+                                  logging. LLM responses are not inspected for
+                                  reasoning quality; no audit trail of how the
+                                  agent arrived at answers. history list in
+                                  agent.py is in-process only and discarded on
+                                  restart.
+  [Critical]  Controllability     No programmatic kill switch. Agent only
+                                  terminates on Ctrl+C (OS signal) or
+                                  exception. No code path exists to gracefully
+                                  stop the agent mid-conversation or cancel an
+                                  in-flight API call. (agent.py: no signal
+                                  handler, no kill flag, no timeout on
+                                  CLIENT.messages.create() call at line 26)
+  [Critical]  Controllability     No pause/resume capability. Conversation
+                                  history is volatile in-process list
+                                  (agent.py line 11); no checkpoint mechanism
+                                  exists. Restart loses all context. Cannot
+                                  pause mid-question and resume later.
+                                  (agent.py: history list has no persistence,
+                                  no state serialization)
+  [Critical]  Context Integrity   Unbounded context accumulation: history list
+                                  grows without limit across the session. No
+                                  pruning, summarization, or window-aware
+                                  truncation. Will cause context window
+                                  overflow and silent degradation in long
+                                  conversations. (agent.py line 11, ask()
+                                  function)
+  [Critical]  Context Integrity   No input sanitization: user questions and
+                                  session context (language, expertise) flow
+                                  directly into the system prompt without
+                                  validation or escaping. Enables prompt
+                                  injection attacks via malicious session data
+                                  or user input. (agent.py lines 24-26, 33)
+  [Critical]  Context Integrity   Stale context never refreshed: session
+                                  context loaded once at startup and never re-
+                                  fetched. User preferences or conversation
+                                  state changes on the backend are invisible
+                                  to the agent. (agent.py line 40,
+                                  load_session_context called only in main())
+  [High    ]  Foundation          Slice boundary not documented or enforced.
+                                  README.md and agent.py contain no
+                                  architecture diagram, no explicit ownership
+                                  boundary, no data contract definition. The
+                                  relationship between agent and session-
+                                  service is implicit and tightly coupled.
+  [High    ]  Foundation          Inter-agent communication is structural, not
+                                  deliberate. agent.py line 18-24: session-
+                                  service call is required on every startup
+                                  and embedded in the main control flow. No
+                                  explicit contract, no versioning, no async
+                                  fallback. This is coupling, not integration.
+  [High    ]  Op. Excellence      No evals defined or scheduled. Agent returns
+                                  all Claude responses as-is with no
+                                  hallucination measurement, model selection
+                                  validation, or behavior regression
+                                  detection. Evidence: no evals/ directory;
+                                  AWAF_SCORE.md notes 'No evals'.
+  [High    ]  Op. Excellence      No postmortem process. No template, no
+                                  incident records, no blameless review
+                                  mechanism. Operational learning is blocked.
+                                  Evidence: no postmortem artifacts provided;
+                                  README.md and agent.py silent on incident
+                                  response.
+  [High    ]  Security            Blast radius of compromised agent is
+                                  unbounded. No rate limits, token budgets, or
+                                  API scope restrictions. A compromised agent
+                                  can exhaust Anthropic quota, enumerate all
+                                  sessions via the session service, or
+                                  exfiltrate user context without triggering
+                                  alerts (agent.py lines 37-45, 24-31).
+  [High    ]  Security            Single INTERNAL_TOKEN used for all session
+                                  service operations with no per-session or
+                                  per-operation scoping. Token grants access
+                                  to any session endpoint; compromise of the
+                                  token grants full access to the session
+                                  service (agent.py line 26).
+  [High    ]  Security            Credentials read directly from environment
+                                  variables with no rotation, audit trail, or
+                                  centralized secrets management. No
+                                  integration with AWS Secrets Manager,
+                                  HashiCorp Vault, or Azure Key Vault.
+                                  Credential compromise is undetectable and
+                                  unrecoverable (agent.py lines 1-2, README).
+  [High    ]  Reliability         No retry logic or circuit breaker. Both
+                                  requests.get() (line 13) and
+                                  CLIENT.messages.create() (line 27) will fail
+                                  immediately on transient errors. No
+                                  exponential backoff, no retry budget.
+  [High    ]  Reliability         No checkpoint/resume mechanism. Conversation
+                                  history is in-process memory only (agent.py
+                                  line 9). Agent restart loses all context. No
+                                  persistence layer, no session recovery.
+  [High    ]  Reliability         Silent partial failures possible. ask()
+                                  function (line 19) appends user question to
+                                  history before API call succeeds. If
+                                  Anthropic API fails mid-response, history is
+                                  corrupted with incomplete assistant message.
+  [High    ]  Performance         No latency instrumentation or SLO. agent.py
+                                  contains no timing code around
+                                  CLIENT.messages.create() (line 28) or
+                                  requests.get() (line 16). No latency
+                                  dashboard, no p50/p95 targets, no alerting
+                                  on slow responses. Operators cannot detect
+                                  performance regressions.
+  [High    ]  Performance         No caching of responses. Identical questions
+                                  asked in the same session will trigger a
+                                  full LLM call each time (line 28). No
+                                  semantic caching, no Redis, no in-memory
+                                  deduplication. Wastes tokens and increases
+                                  latency for repeated queries.
+  [High    ]  Cost Optim.         Token usage not tracked. Response object
+                                  from `CLIENT.messages.create()`
+                                  (agent.py:48) includes `usage` metadata
+                                  (input_tokens, output_tokens), but code
+                                  discards it. No per-session cost
+                                  calculation, no cost trend visibility, no
+                                  basis for alerting.
+  [High    ]  Cost Optim.         No cost alerts or budget service
+                                  integration. No connection to AWS Budgets,
+                                  Azure Cost Management, or internal cost
+                                  tracking. Overspend is discovered only via
+                                  billing invoice, weeks after the fact.
+  [High    ]  Sustainability      No result caching mechanism. Identical
+                                  questions asked in the same session will
+                                  trigger identical API calls and incur
+                                  identical costs. No memoization, no cache
+                                  key generation, no TTL-based invalidation.
+  [High    ]  Sustainability      No batching of API calls. Session context is
+                                  fetched once at startup (agent.py line 47),
+                                  but each user question triggers a separate
+                                  synchronous Anthropic API call (agent.py
+                                  line 35). No opportunity to batch multiple
+                                  questions or defer non-critical calls.
+  [High    ]  Reasoning Integ.    Hallucination rate unmeasured. No red team
+                                  results, no adversarial testing, no metrics
+                                  dashboard. Agent will confidently return
+                                  incorrect information with no detection
+                                  mechanism.
+  [High    ]  Reasoning Integ.    No uncertainty surfacing. ask() returns
+                                  response.content[0].text as a flat string.
+                                  If the LLM is uncertain or contradicts
+                                  itself, the agent has no mechanism to detect
+                                  or communicate this to the user.
+  [High    ]  Reasoning Integ.    Provenance tracking absent. Session context
+                                  from load_session_context() is not logged or
+                                  validated before injection into the system
+                                  prompt. No audit trail of which context
+                                  fields influenced which responses.
+  [High    ]  Controllability     No human-in-the-loop checkpoints. All user
+                                  questions flow directly into LLM prompt
+                                  without review, validation, or approval
+                                  gate. No mechanism to inspect or reject a
+                                  question before it reaches Claude. (agent.py
+                                  ask() function lines 20-31: question
+                                  appended to history and sent immediately)
+  [High    ]  Controllability     No approval gate before irreversible
+                                  actions. Responses are printed directly to
+                                  stdout without review, confirmation, or
+                                  audit. User cannot reject or modify an
+                                  answer before it is displayed. (agent.py
+                                  line 35: print(f'\nAgent: {answer}\n') with
+                                  no confirmation step)
+  [High    ]  Controllability     No auditable action log. No structured
+                                  logging of questions, answers, or API calls.
+                                  History list is in-process memory only and
+                                  lost on restart. No audit trail for
+                                  compliance or incident investigation.
+                                  (agent.py: no logging module, no audit
+                                  table, no CloudTrail equivalent)
+  [High    ]  Context Integrity   No context window tracking: no token
+                                  counting, no monitoring of message size, no
+                                  warning before overflow. Agent will silently
+                                  drop context or fail when approaching
+                                  limits. (agent.py, no token_counter or
+                                  window_monitor)
+  [High    ]  Context Integrity   No epistemic markers: all context treated as
+                                  equally reliable. Agent does not distinguish
+                                  between user-provided facts, session
+                                  metadata, and inferred state. Responses
+                                  carry no uncertainty signals. (agent.py
+                                  lines 24-26, system prompt)
+  [High    ]  Context Integrity   Conversation state not persisted: history is
+                                  in-process memory only. A restart or crash
+                                  loses all conversation context. No
+                                  scratchpad, memory store, or session replay
+                                  mechanism. (agent.py line 11, history:
+                                  list[dict] = [])
+  [Medium  ]  Performance         No parallelization or batching. ask()
+                                  function (line 20) is synchronous and
+                                  sequential: load session context, call LLM,
+                                  append to history. No async/await, no
+                                  concurrent requests, no message batching.
+                                  Each question blocks until the LLM response
+                                  arrives.
+  [Medium  ]  Cost Optim.         Model selection is static. Agent always uses
+                                  `claude-opus-4-6` (agent.py:7), the most
+                                  expensive model (~$15/1M input tokens).
+                                  Simple factual questions could use `claude-
+                                  haiku` (~$0.80/1M input tokens) and save 95%
+                                  on cost for that query.
+  [Medium  ]  Sustainability      No input deduplication or change detection.
+                                  Every question, even if identical to a prior
+                                  one, is appended to history and sent to the
+                                  API. No hash-based skip logic or input
+                                  comparison.
+  [Medium  ]  Controllability     No runtime scope restriction. Model
+                                  (`claude-opus-4-6`) and max_tokens (2048)
+                                  are hardcoded. Cannot adjust agent behavior
+                                  without code change and redeployment.
+                                  (agent.py lines 6, 25: MODEL and max_tokens
+                                  are constants)
+
+----------------------------------------
+RECOMMENDATIONS
+  Foundation            Refactor load_session_context() to return sensible
+                        defaults on failure instead of sys.exit(1). agent.py
+                        line 30-33: catch requests.RequestException and return
+                        {'language': 'en', 'expertise': 'general'} or load
+                        from a local cache file. This unblocks the agent to
+                        function independently.
+  Foundation            Move conversation history to a local file or in-memory
+                        cache with optional persistence. agent.py line 13:
+                        replace module-level list with a SessionMemory class
+                        that can serialize to disk on shutdown and restore on
+                        startup. Agent owns its context.
+  Foundation            Add explicit timeout and circuit breaker to session-
+                        service calls. agent.py line 20: add timeout=5 to
+                        requests.get(); wrap in a retry decorator with max 2
+                        attempts, then fall back to defaults. Contain the
+                        blast radius.
+  Foundation            Document the slice boundary and data contract. Create
+                        ARCHITECTURE.md at repo root: define what the agent
+                        owns (conversation loop, question routing, response
+                        formatting), what it delegates (user preferences,
+                        session state), and the explicit contract with
+                        session-service (request/response schema, error
+                        handling, SLA).
+  Op. Excellence        Create docs/slos.md defining: latency p99 < 5s,
+                        success rate > 99%, cost < $0.10/session. Add
+                        CloudWatch alarms for each. Owner: platform team.
+  Op. Excellence        Create docs/runbooks/ with procedures for: (1)
+                        session-service down -> use cached context or default
+                        prefs, (2) Anthropic timeout -> retry with exponential
+                        backoff, (3) context overflow -> truncate history.
+                        Owner: on-call engineer.
+  Op. Excellence        Replace print() with structured logging. Add import
+                        logging; configure JSON formatter with session_id,
+                        request_id, timestamp. Example: agent.py line 48 ->
+                        logger.info('answer_generated',
+                        session_id=args.session,
+                        tokens=response.usage.output_tokens). Owner: agent
+                        maintainer.
+  Op. Excellence        Add CloudWatch/Datadog monitors: ErrorRate > 5%,
+                        Latency p99 > 5s, TokensPerSession > 50k. Route to
+                        PagerDuty on-call. Owner: platform team.
+  Op. Excellence        Create evals/test_model_selection.py with unit tests
+                        for model choice logic (e.g., haiku for short Q,
+                        sonnet for long Q). Run in CI on every commit. Owner:
+                        agent maintainer.
+  Op. Excellence        Create docs/postmortem_template.md with sections:
+                        timeline, root cause, impact, action items. Link from
+                        README.md. Owner: platform team.
+  Security              Implement input sanitization in ask() function
+                        (agent.py line 35). Validate question length, reject
+                        control characters, and escape special characters
+                        before appending to history. Consider using a prompt
+                        injection filter library (e.g., llm-guard).
+  Security              Switch session service endpoint from http:// to
+                        https:// and enforce certificate validation (agent.py
+                        line 25). Migrate INTERNAL_TOKEN to a short-lived
+                        bearer token issued by an identity provider (e.g.,
+                        OAuth2, mTLS).
+  Security              Add SIGTERM handler and kill flag to main loop
+                        (agent.py line 58). Implement
+                        signal.signal(signal.SIGTERM, lambda s, f:
+                        setattr(sys, '_exit_flag', True)) and check flag in
+                        while loop.
+  Security              Implement SESSION_TOKEN_LIMIT guard and per-session
+                        rate limiting (agent.py line 37). Add token counter
+                        incremented after each API call; break loop and alert
+                        if limit exceeded. Add exponential backoff on session
+                        service 429 responses.
+  Security              Scope INTERNAL_TOKEN to specific session ID and read-
+                        only operations. Migrate to per-session tokens issued
+                        by session service at startup (agent.py line 24).
+                        Implement least-privilege: agent should only read its
+                        own session, not enumerate or modify others.
+  Security              Integrate with AWS Secrets Manager or HashiCorp Vault
+                        for credential rotation and audit (agent.py lines
+                        1-2). Load ANTHROPIC_API_KEY and INTERNAL_TOKEN from
+                        secrets manager at startup; implement automatic
+                        rotation every 30 days.
+  Reliability           Add timeout to requests.get() call: agent.py line 13,
+                        change to `requests.get(..., timeout=5)`. Add timeout
+                        to Anthropic client: agent.py line 27, add
+                        `timeout=30` to CLIENT.messages.create().
+  Reliability           Implement fallback in load_session_context(): agent.py
+                        line 11, return default context dict (language='en',
+                        expertise='general') on exception instead of
+                        sys.exit(1). Allow agent to run with degraded
+                        preferences.
+  Reliability           Cap history before each API call: agent.py line 19,
+                        add logic to trim history to last N turns (e.g., 10)
+                        before appending new message. Prevents context window
+                        overflow.
+  Reliability           Add retry logic with exponential backoff: wrap
+                        requests.get() and CLIENT.messages.create() calls in a
+                        retry decorator (e.g., tenacity library) with
+                        max_retries=3, backoff_factor=2.
+  Reliability           Persist conversation history: add a checkpoint
+                        mechanism (e.g., write history to local SQLite or
+                        session service) after each successful ask() call.
+                        Support resume on restart.
+  Reliability           Fail loudly on partial state: agent.py line 20, only
+                        append assistant response to history AFTER successful
+                        API response. Validate response.content[0].text is
+                        non-empty before appending.
+  Performance           Implement model routing in ask() function (agent.py
+                        line 20): measure question length/complexity (token
+                        count or keyword heuristics); route to claude-haiku
+                        for <500 tokens, claude-sonnet for 500-2000, claude-
+                        opus-4-6 only for >2000 or explicit reasoning tasks.
+                        Add a --model-override flag for testing.
+  Performance           Add context pruning before each API call (agent.py
+                        line 24-28): cap history to last N turns (e.g., 10
+                        turns = 20 messages) or summarize turns older than M
+                        minutes. Implement a sliding window that removes
+                        oldest user/assistant pairs when len(history) >
+                        threshold.
+  Performance           Instrument latency with timing decorators or context
+                        managers (agent.py line 20, 28): wrap
+                        CLIENT.messages.create() and requests.get() with
+                        time.perf_counter(); log elapsed_ms to structured logs
+                        with session_id. Define SLO: p50 < 2s, p95 < 5s for
+                        typical questions.
+  Performance           Add a simple in-memory cache (agent.py line 10):
+                        hash(question) -> answer dict; check cache before
+                        calling ask(). Expire entries after 1 hour or on
+                        session reload. For production, upgrade to Redis with
+                        semantic similarity matching.
+  Performance           Convert ask() to async (agent.py line 20): use asyncio
+                        and httpx to parallelize session service fetch and LLM
+                        call if they are independent. Measure latency
+                        improvement; document in a performance benchmark file.
+  Cost Optim.           Add `SESSION_TOKEN_LIMIT` env var (default 10000
+                        tokens) and track cumulative input+output tokens.
+                        Break the main loop when exceeded, with a user-facing
+                        message. Implement in agent.py:ask() by capturing
+                        `response.usage.input_tokens +
+                        response.usage.output_tokens` and maintaining a
+                        session total.
+  Cost Optim.           Add max-turn guard to main loop (agent.py:60-67):
+                        `turn_count = 0; MAX_TURNS = 50` (or env var).
+                        Increment on each question; exit with 'Session limit
+                        reached' when exceeded.
+  Cost Optim.           Log token usage and cost per turn. After `response =
+                        CLIENT.messages.create()` (agent.py:48), extract
+                        `response.usage` and log: `{session_id, turn,
+                        input_tokens, output_tokens, cost_usd}`. Write to
+                        structured log or cost tracking service (e.g.,
+                        Datadog, CloudWatch).
+  Cost Optim.           Implement model selection logic: if question length <
+                        100 chars and no prior context, use `claude-haiku`;
+                        else use `claude-sonnet`. Reserve `claude-opus-4-6`
+                        for multi-turn reasoning. Add to agent.py:ask() before
+                        `CLIENT.messages.create()` call.
+  Cost Optim.           Integrate with AWS Budgets or equivalent: create a
+                        budget alert for the service account running this
+                        agent, set threshold at 80% of monthly spend limit,
+                        and route alerts to on-call Slack channel.
+  Sustainability        Implement model routing: add a function that
+                        classifies question complexity (keyword-based or via a
+                        lightweight heuristic) and routes to claude-haiku for
+                        simple queries, claude-sonnet for medium, and claude-
+                        opus-4-6 only for complex reasoning. Update agent.py
+                        ask() function to call this router before
+                        CLIENT.messages.create().
+  Sustainability        Add a simple in-memory cache with input hash as key:
+                        before calling ask(), compute hash(question) and check
+                        if result exists in a dict. Store results with a TTL
+                        (e.g., 1 hour) or session-scoped lifetime. Update
+                        agent.py ask() function to check cache first.
+  Sustainability        Implement input deduplication: before appending to
+                        history, check if the question is identical to the
+                        last N questions (e.g., last 5). If so, return the
+                        cached answer instead of calling the API. Add a simple
+                        equality check in agent.py ask() function.
+  Sustainability        Add cost tracking and reporting: log token counts from
+                        each API response (response.usage.input_tokens,
+                        response.usage.output_tokens) and accumulate a session
+                        total. Print a cost summary at exit or on request.
+                        Update agent.py ask() function to extract and log
+                        usage.
+  Reasoning Integ.      Create evals/test_reasoning.py with at least 10 unit
+                        tests using Promptfoo or Braintrust: test that the
+                        agent correctly selects language/expertise from
+                        session context, test that it rejects out-of-scope
+                        questions, test that it surfaces 'I don't know' for
+                        ambiguous queries. Run before each deployment.
+  Reasoning Integ.      Add reasoning trace logging to ask() in agent.py:
+                        capture response.stop_reason, response.usage, and any
+                        thinking/reasoning fields from the API response. Log
+                        with session_id and question hash for auditability.
+  Reasoning Integ.      Implement confidence scoring in ask(): parse
+                        response.content[0].text for uncertainty markers ('I'm
+                        not sure', 'likely', 'probably') and return a tuple
+                        (answer, confidence_score) instead of a bare string.
+                        Surface confidence to the user.
+  Reasoning Integ.      Add provenance logging to load_session_context() in
+                        agent.py: log the session_id, which context fields
+                        were retrieved, and their values before they are
+                        injected into the system prompt. Include this in
+                        structured logs with a trace_id.
+  Reasoning Integ.      Create a red team test suite (evals/adversarial.py)
+                        with 5-10 adversarial prompts designed to trigger
+                        hallucinations (e.g., 'What is the user's credit card
+                        number?', 'Invent a fact about the user'). Run monthly
+                        and track pass/fail rate.
+  Controllability       Implement a SIGTERM handler and kill flag in agent.py
+                        main() loop. Check the flag before each ask() call and
+                        break the loop if set. This enables external process
+                        managers (systemd, Kubernetes) to gracefully terminate
+                        the agent. (agent.py: add
+                        signal.signal(signal.SIGTERM, handler) and check
+                        kill_flag in while True loop)
+  Controllability       Add a timeout parameter to CLIENT.messages.create()
+                        call (agent.py line 26) and requests.get() call in
+                        load_session_context() (agent.py line 15). Set to 30s.
+                        This prevents indefinite hangs and allows cancellation
+                        via timeout. (agent.py lines 15, 26: add timeout=30)
+  Controllability       Implement structured logging with a session_id field
+                        on every action. Log questions, answers, API calls,
+                        and errors to a file or centralized log service. This
+                        creates an auditable action trail. (agent.py: import
+                        logging, add logger.info() calls in ask() and
+                        load_session_context())
+  Controllability       Add a human-in-the-loop checkpoint before sending
+                        questions to Claude. Prompt the user to confirm the
+                        question or allow them to edit it. Log the
+                        confirmation. (agent.py ask() function: add
+                        input('Confirm question? [y/n]: ') before line 20)
+  Controllability       Persist conversation history to a file or database
+                        keyed by session_id. On startup, load prior history if
+                        it exists. This enables pause/resume across restarts.
+                        (agent.py: add save_history(session_id, history) call
+                        after each ask(), load_history(session_id) in main())
+  Controllability       Move MODEL and max_tokens to environment variables
+                        with defaults. This allows runtime scope adjustment
+                        without redeployment. (agent.py lines 6, 25: replace
+                        with os.environ.get('MODEL', 'claude-opus-4-6'))
+  Context Integrity     Implement context window tracking: add token_counter
+                        using tiktoken or Anthropic's token counting API.
+                        Track cumulative tokens before each API call and log
+                        warnings at 70% and 85% of model's context limit.
+                        (agent.py, add to ask() function)
+  Context Integrity     Implement history pruning: cap history to the last N
+                        turns (e.g., 20 turns) before each API call.
+                        Optionally summarize older turns into a single
+                        'context summary' message. (agent.py, modify ask()
+                        function before CLIENT.messages.create())
+  Context Integrity     Sanitize session context: validate language and
+                        expertise fields against a whitelist; escape any user-
+                        controlled strings before interpolating into system
+                        prompt. Use f-string escaping or a templating library.
+                        (agent.py, modify load_session_context() return or
+                        ask() system prompt construction)
+  Context Integrity     Refresh session context periodically: re-fetch session
+                        context every N turns or on explicit user command.
+                        Compare new context to cached context and alert if
+                        preferences changed. (agent.py, modify main() loop to
+                        call load_session_context() every 5-10 turns)
+  Context Integrity     Persist conversation state: store history to a local
+                        SQLite DB or session service after each turn. On
+                        restart, reload history from storage. Include a
+                        session_id in all stored records. (agent.py, add
+                        persist_history() and load_history() functions; call
+                        after each ask())
+  Context Integrity     Add epistemic markers to system prompt: instruct the
+                        model to prefix uncertain statements with 'I'm not
+                        certain, but...' and to flag when it is reasoning
+                        beyond the provided context. (agent.py, modify system
+                        prompt in ask() function)
+
+----------------------------------------
+TO IMPROVE THIS ASSESSMENT
+  Provide ARCHITECTURE.md with a diagram showing agent slice, owned tools, and
+  external dependencies with explicit contracts.
+  Provide a state management design doc showing how conversation history and
+  session context are owned and persisted.
+  Provide a failure mode analysis or runbook showing how the agent behaves
+  when session-service is unavailable.
+
+----------------------------------------
+EVIDENCE GAPS
+  No architecture diagram or system design document showing agent boundaries
+  and dependencies.
+  No data contract or API schema for session-service integration (belongs to
+  Foundation, not Security).
+  No fallback or degradation strategy documented or implemented.
+  No state ownership model defined (what is agent-owned vs. external).
+  SLO document (latency, success rate, cost targets) -- blocks alerting and
+  runbook prioritization
+  Runbook artifacts for session-service failure, API timeout, context overflow
+  -- blocks incident response
+  Structured logging config (JSON formatter, session_id field) -- blocks
+  production debugging
+  Alerting config (CloudWatch/Datadog/PagerDuty) -- blocks real-time incident
+  detection
+  Eval suite with scheduled CI runs -- blocks behavior regression detection
+  Postmortem template and incident records -- blocks operational learning
+  No IAM policy or RBAC definition provided; cannot verify least-privilege at
+  infrastructure layer
+  No network security group or VPC configuration provided; cannot verify
+  network isolation
+  No secrets manager configuration provided; cannot verify credential rotation
+  or audit
+  No security scanner output (Snyk, OWASP ZAP) provided; cannot verify absence
+  of other vulnerabilities
+  No penetration test results provided; cannot verify real-world attack
+  surface
+  No timeout configuration in code or environment variables
+  No retry policy or circuit breaker implementation
+  No checkpoint/persistence layer or recovery mechanism
+  No SLO or uptime dashboard referenced
+  No chaos engineering or failure mode testing results
+  No incident postmortems or reliability runbooks
+  No latency dashboards (Datadog, Grafana, LangSmith) -- cannot assess p50/p95
+  or trend over time
+  No performance benchmarks or load tests -- no evidence of throughput or tail
+  latency under realistic load
+  No ADR or design doc explaining model selection rationale -- cannot verify
+  if hardcoded choice is intentional
+  No caching configuration (Redis, semantic cache, in-memory) -- absence is
+  clear but no alternative evidence provided
+  No async/concurrent patterns in codebase -- no evidence of parallelization
+  attempts
+  No token usage dashboard or cost trend export (LangSmith, Langfuse, Datadog
+  LLM Observability) -- cannot assess historical spend patterns or anomalies.
+  No budget alert configuration (AWS Budgets, Azure Cost Management, GCP
+  Budget alerts) -- cannot verify alerting is wired.
+  No cost tracking code or logs -- cannot verify per-session or per-turn cost
+  attribution.
+  No model selection ADR or decision log explaining why claude-opus-4-6 is the
+  only choice
+  No caching implementation or cache hit/miss metrics
+  No batch processing config or async call patterns
+  No cost trend data or energy/carbon reporting
+  No input deduplication logic or change detection mechanism
+  No eval framework or test suite (Promptfoo, Braintrust, LangSmith, or
+  custom) -- blocks reasoning integrity assessment
+  No reasoning trace logs or chain-of-thought output -- cannot audit how agent
+  arrived at answers
+  No hallucination metrics or red team results -- cannot measure failure rate
+  No uncertainty quantification or confidence scoring -- cannot distinguish
+  high-confidence from low-confidence responses
+  No provenance audit trail for session context injection -- cannot trace
+  which context fields influenced which responses
+  No signal handler or kill flag implementation -- blocks external termination
+  (Controllability)
+  No structured logging or audit log -- blocks incident investigation
+  (Controllability, Op. Excellence)
+  No human-in-the-loop workflow or approval gates -- blocks compliance and
+  safety (Controllability)
+  No checkpoint or persistence mechanism -- blocks pause/resume
+  (Controllability, Reliability)
+  No timeout on external calls -- blocks cancellation (Controllability,
+  Reliability)
+  No context window usage dashboard or monitoring (LangSmith, Langfuse, or
+  custom logging) -- affects Operational Excellence pillar
+  No input validation or sanitization library (e.g., bleach, html.escape) --
+  affects Security pillar
+  No session state persistence layer (DB schema, ORM config) -- affects
+  Reliability pillar
+  No token counting integration (tiktoken config, Anthropic token API calls)
+  -- affects Performance Efficiency pillar
+
+----------------------------------------
+Tokens: 62,214 in / 27,278 out
+Estimated cost: $0.1589 USD
+Generated: 2026-03-29 00:13
