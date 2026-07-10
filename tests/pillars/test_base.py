@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from awaf.pillars.base import _PATTERN_GLOSSARY
 from awaf.pillars.foundation import FoundationAgent
 
 _VALID_RESPONSE = {
@@ -56,3 +57,16 @@ def test_invalid_json_returns_fallback() -> None:
     assert result.score == 0.0
     assert result.confidence == "self_reported"
     assert any("could not be parsed" in f["detail"] for f in result.findings)
+
+
+def test_foundation_prompt_includes_pattern_glossary() -> None:
+    prompt = FoundationAgent().system_prompt
+    assert _PATTERN_GLOSSARY.strip() in prompt
+    assert "ReAct" in prompt
+    assert "Reflexion" in prompt
+
+
+def test_pillar_prompt_version_is_current() -> None:
+    prompt = FoundationAgent().system_prompt
+    assert "AWAF v1.4" in prompt
+    assert "v1.3" not in prompt

@@ -89,6 +89,18 @@ reasoning chains. Go directly to the tally and JSON output. Abbreviate evidence 
 to file:line or a short phrase only.
 """
 
+_PATTERN_GLOSSARY = """\
+PATTERN GLOSSARY (reference for the pattern-justification and reasoning checks):
+  Scratchpad              -- Intermediate reasoning held in context then stripped. Signal: stripped consistently, or leaked inconsistently?
+  Chain of Thought        -- Structured reasoning made visible before the answer. Signal: reasoning visible, or outputs merely asserted?
+  ReAct                   -- Interleaved reason, act, observe loop. Signal: tool calls preceded by reasoning, and each observation incorporated before the next action?
+  Plan & Execute          -- Planning separated from execution. Signal: plan is separate, inspectable, and interruptible?
+  Reflexion               -- Outcome critiques written back to memory and reused. Signal: critiques fed into later runs?
+  Self-Consistency        -- Sample N times and vote. Signal: used selectively on ambiguous outputs with N justified, not naively on everything?
+  Tool-Augmented Scratch  -- Scratchpad plus tool calls. Signal: trace persisted for debugging, and bounded?
+  Memory-Augmented Gen    -- Retrieval or memory store feeding context. Signal: a compression or retrieval strategy exists, or context grows unbounded?
+"""
+
 _JSON_SCHEMA = """\
 Return ONLY valid JSON (no markdown fences, no commentary before or after) with this exact structure:
 {
@@ -216,7 +228,7 @@ class PillarAgent(ABC):
     def _build_system_prompt(pillar_name: str, what_to_assess: str, evidence_sources: str) -> str:
         return (
             f"You are an expert AI systems architect evaluating production readiness.\n"
-            f"Assess the provided artifacts against the AWAF v1.3 **{pillar_name}** pillar.\n\n"
+            f"Assess the provided artifacts against the AWAF v1.4 **{pillar_name}** pillar.\n\n"
             f"## What to Assess\n{what_to_assess}\n\n"
             f"## Evidence Sources\n{evidence_sources}\n\n"
             f"{_SCORING_GUIDE}\n"
