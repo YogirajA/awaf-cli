@@ -97,8 +97,8 @@ PATTERN GLOSSARY (reference for the pattern-justification and reasoning checks):
   Plan & Execute          -- Planning separated from execution. Signal: plan is separate, inspectable, and interruptible?
   Reflexion               -- Outcome critiques written back to memory and reused. Signal: critiques fed into later runs?
   Self-Consistency        -- Sample N times and vote. Signal: used selectively on ambiguous outputs with N justified, not naively on everything?
-  Tool-Augmented Scratch  -- Scratchpad plus tool calls. Signal: trace persisted for debugging, and bounded?
-  Memory-Augmented Gen    -- Retrieval or memory store feeding context. Signal: a compression or retrieval strategy exists, or context grows unbounded?
+  Tool-Augmented Scratchpad  -- Scratchpad plus tool calls. Signal: trace persisted for debugging, and bounded?
+  Memory-Augmented Generation -- Retrieval or memory store feeding context. Signal: a compression or retrieval strategy exists, or context grows unbounded?
 """
 
 _JSON_SCHEMA = """\
