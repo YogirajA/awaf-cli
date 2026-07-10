@@ -309,6 +309,23 @@ awaf:
     AWAF_FAIL_THRESHOLD: "60"
 ```
 
+### Skill Eval Grading (`awaf eval-skill`)
+
+The awaf-skill Claude Code skill ships with five eval cases (`skills/awaf/evals/evals.json`), each a prompt plus an expected report summary and a list of natural-language expectations about the resulting report. `awaf eval-skill` runs those cases end to end and grades the output:
+
+```bash
+uv run awaf eval-skill --skill-dir ../awaf-skill --output eval-metrics.json
+```
+
+For each case it runs the skill prompt through the configured provider, applies deterministic report-shape and band-consistency checks, then has a judge model (`--judge-model`, default `claude-opus-4-5`) score every expectation against the report. It writes a metrics JSON (`--output`, default `eval-metrics.json`) and exits non-zero if the pass rate falls below the gate (`--gate`, default `0.85`) or any deterministic check fails.
+
+This corresponds to two CI layers:
+
+- **Layer 1 (report shape, band consistency)** is pure Python, no LLM calls, and runs in the normal unit-test suite (`ci.yml`) on every push and pull request, at no API cost.
+- **Layer 2 (LLM-judge grading)** calls a real provider and judge model, so it runs nightly (and on demand) via `.github/workflows/eval-grader.yml`. That workflow checks out both `awaf-cli` and `awaf-skill`, runs `eval-skill` with `ANTHROPIC_API_KEY` from repo secrets, and uploads the metrics JSON as a build artifact even when the gate fails.
+
+`--provider` and `--model` override the subject provider and model that run the skill, resolved the same way as `awaf run` (CLI flag, then environment, then `awaf.toml`).
+
 ---
 
 ## Exit Codes
