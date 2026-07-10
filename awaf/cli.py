@@ -1118,10 +1118,9 @@ def providers() -> None:
 @click.option("--model", default=None, metavar="MODEL", help="Subject model that runs the skill.")
 @click.option(
     "--judge-model",
-    default="claude-opus-4-5",
-    show_default=True,
+    default=None,
     metavar="MODEL",
-    help="Stronger model that grades each expectation.",
+    help="Model that grades each expectation. Defaults to the subject model; must be valid for --provider.",
 )
 @click.option("--gate", default=0.85, show_default=True, type=float, help="Minimum pass rate.")
 @click.option(
@@ -1135,7 +1134,7 @@ def eval_skill(
     skill_dir: str,
     provider: str | None,
     model: str | None,
-    judge_model: str,
+    judge_model: str | None,
     gate: float,
     output: str,
 ) -> None:
@@ -1148,7 +1147,8 @@ def eval_skill(
     from awaf.pricing import estimate_cost
 
     subject_cfg = resolve_provider_config(cli_provider=provider, cli_model=model)
-    judge_cfg = resolve_provider_config(cli_provider=provider, cli_model=judge_model)
+    judge_model_effective = judge_model or subject_cfg.model
+    judge_cfg = resolve_provider_config(cli_provider=provider, cli_model=judge_model_effective)
     subject = get_provider(subject_cfg)
     judge = get_provider(judge_cfg)
     subject.validate_config()

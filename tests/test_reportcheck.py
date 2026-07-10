@@ -76,3 +76,13 @@ def test_findings_severity_ordered_ok() -> None:
 def test_findings_severity_out_of_order() -> None:
     bad = "[Medium  ] a\n[Critical] b\n"
     assert not rc.findings_severity_ordered(bad).ok
+
+
+def test_label_matches_score_prefers_slash_100_form() -> None:
+    # A stray leading integer on the overall line must not be misread as the score.
+    text = "Overall Score (run 3): 88/100 -- Production Ready"
+    assert rc.label_matches_score(text).ok
+
+
+def test_pillar_aliases_cover_ten_pillars() -> None:
+    assert len(rc.PILLAR_ALIASES) == 10

@@ -10,7 +10,7 @@
 >
 > | Score | Rating | What it means in practice |
 > |-------|--------|-----------------------------|
-> | 0–24 | Not Ready | Do not ship — structural problems that will cause outages |
+> | **0–24** | **Not Ready** | **Do not ship — structural problems that will cause outages** |
 > | 25–49 | High Risk | Will cause production incidents; architectural rework needed |
 > | 50–69 | Needs Work | Meaningful gaps; addressable but not quickly |
 > | 70–84 | Near Ready | Minor gaps; addressable before go-live |

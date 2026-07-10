@@ -28,6 +28,9 @@ _SIBLING = [
 ]
 
 
+# Bands are contiguous, so pinning every LOWER bound fully determines the partition.
+# This helper intentionally checks lower bounds only; an inconsistent upper bound in a
+# doc (e.g. "70-89") is cosmetic and is not locked here.
 def _bands_from_text(text: str) -> dict[str, int]:
     """Extract {label: lower_bound} from lines that name exactly one band label and a range."""
     out: dict[str, int] = {}

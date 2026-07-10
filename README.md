@@ -317,7 +317,7 @@ The awaf-skill Claude Code skill ships with five eval cases (`skills/awaf/evals/
 uv run awaf eval-skill --skill-dir ../awaf-skill --output eval-metrics.json
 ```
 
-For each case it runs the skill prompt through the configured provider, applies deterministic report-shape and band-consistency checks, then has a judge model (`--judge-model`, default `claude-opus-4-5`) score every expectation against the report. It writes a metrics JSON (`--output`, default `eval-metrics.json`) and exits non-zero if the pass rate falls below the gate (`--gate`, default `0.85`) or any deterministic check fails.
+For each case it runs the skill prompt through the configured provider, applies deterministic report-shape and band-consistency checks, then has a judge model (`--judge-model`, which defaults to the subject model; the nightly workflow uses `claude-opus-4-5`) score every expectation against the report. It writes a metrics JSON (`--output`, default `eval-metrics.json`) and exits non-zero if the pass rate falls below the gate (`--gate`, default `0.85`) or any deterministic check fails.
 
 This corresponds to two CI layers:
 
@@ -356,6 +356,7 @@ awaf compare <id1> <id2>                         # diff two assessments
 awaf report --format json                        # JSON output for CI artifact upload
 awaf report --coverage                           # show files analyzed and skipped
 awaf providers                                   # list configured providers and status
+awaf eval-skill                                  # grade the awaf skill's eval cases (Layer 2)
 ```
 
 Progress is printed as each pillar starts (`▸ Evaluating Foundation...`). No color codes when stdout is not a TTY. No spinners in CI mode.

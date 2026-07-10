@@ -21,6 +21,8 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/awaf-skill
           path: awaf-skill
+          # If awaf-skill is private, the default GITHUB_TOKEN cannot clone it;
+          # add `token: ${{ secrets.AWAF_SKILL_PAT }}` with a PAT that can read it.
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -39,7 +41,7 @@ jobs:
         working-directory: awaf-cli
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: uv run awaf eval-skill --skill-dir ../awaf-skill --output eval-metrics.json
+        run: uv run awaf eval-skill --skill-dir ../awaf-skill --judge-model claude-opus-4-5 --output eval-metrics.json
 
       - name: Upload metrics
         if: always()
