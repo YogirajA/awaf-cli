@@ -15,7 +15,9 @@ Stale context is corrupted reasoning. This pillar has no cloud equivalent.
   offload context before approaching window limits, rather than silently degrading as the window fills?
 - Is agent state explicitly persisted during long sessions (scratchpad, memory store, or equivalent), not just accumulated in context?
 - Are tool response outputs filtered to relevant fields before re-entering context (not just input context pruned)?
+"""
 
+_PATTERN_SIGNALS = """\
 PATTERN SIGNALS (advisory, not scored): use these to sharpen how you judge the criteria
 above; do not add new tally rows for them.
 - Memory-Augmented Generation: is there a compression or retrieval strategy, or does context grow unbounded?
@@ -40,4 +42,4 @@ class ContextIntegrityAgent(PillarAgent):
 
     @property
     def system_prompt(self) -> str:
-        return self._build_system_prompt("Context Integrity", _WHAT, _EVIDENCE)
+        return self._build_system_prompt("Context Integrity", _WHAT, _EVIDENCE, _PATTERN_SIGNALS)

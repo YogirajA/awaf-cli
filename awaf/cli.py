@@ -501,7 +501,7 @@ def run(
             from datetime import datetime, timedelta
 
             try:
-                from croniter import croniter  # type: ignore[import-untyped]
+                from croniter import croniter  # type: ignore
 
                 now = datetime.now(tz=UTC)
                 cron = croniter(ci_config.schedule, now - timedelta(minutes=5))

@@ -225,7 +225,17 @@ class PillarAgent(ABC):
         )
 
     @staticmethod
-    def _build_system_prompt(pillar_name: str, what_to_assess: str, evidence_sources: str) -> str:
+    def _build_system_prompt(
+        pillar_name: str,
+        what_to_assess: str,
+        evidence_sources: str,
+        pattern_signals: str = "",
+    ) -> str:
+        signals_block = (
+            f"## Pattern Signals (Advisory, Not Scored)\n{pattern_signals}\n\n"
+            if pattern_signals.strip()
+            else ""
+        )
         return (
             f"You are an expert AI systems architect evaluating production readiness.\n"
             f"Assess the provided artifacts against the AWAF v1.4 **{pillar_name}** pillar.\n\n"
@@ -234,5 +244,6 @@ class PillarAgent(ABC):
             f"{_SCORING_GUIDE}\n"
             f"{_CONFIDENCE_GUIDE}\n"
             f"{_RULES}\n"
+            f"{signals_block}"
             f"{_JSON_SCHEMA}"
         )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from awaf.pillars.base import _PATTERN_GLOSSARY, PillarAgent
 
-_WHAT = f"""\
+_WHAT = """\
 - Does the agent own its domain end-to-end: its tools, its context, its data?
 - Can it complete its primary function without structural dependency on other agents?
 - Is the blast radius of a failure contained to this agent's slice?
@@ -13,7 +13,9 @@ _WHAT = f"""\
 IMPORTANT, Foundation Fail: A score below 40 is a Foundation Fail. Note this explicitly
 in your findings. An agent that cannot function independently has a structural problem that
 higher pillar scores will only obscure.
+"""
 
+_PATTERN_SIGNALS = f"""\
 PATTERN CHECK (advisory, non-scored): Identify which pattern from the glossary below the
 agent actually uses, then ask whether a simpler pattern would suffice. Complex, multi-step,
 adaptive tasks with real-time decisions warrant a true agent. Deterministic workflows, simple
@@ -39,4 +41,6 @@ class FoundationAgent(PillarAgent):
 
     @property
     def system_prompt(self) -> str:
-        return self._build_system_prompt("Foundation (Vertical Slice & Autonomy)", _WHAT, _EVIDENCE)
+        return self._build_system_prompt(
+            "Foundation (Vertical Slice & Autonomy)", _WHAT, _EVIDENCE, _PATTERN_SIGNALS
+        )

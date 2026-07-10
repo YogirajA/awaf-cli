@@ -11,7 +11,9 @@ A server does not hallucinate. Agents do. This pillar has no cloud equivalent.
 - Is hallucination rate measured?
 - Does the agent surface uncertainty rather than fabricating confidence?
 - Is there provenance tracking on tool results?
+"""
 
+_PATTERN_SIGNALS = """\
 PATTERN SIGNALS (advisory, not scored): use these to sharpen how you judge the criteria
 above; do not add new tally rows for them.
 - Chain of Thought: is structured reasoning visible before answers, or are outputs merely asserted?
@@ -37,4 +39,4 @@ class ReasoningAgent(PillarAgent):
 
     @property
     def system_prompt(self) -> str:
-        return self._build_system_prompt("Reasoning Integrity", _WHAT, _EVIDENCE)
+        return self._build_system_prompt("Reasoning Integrity", _WHAT, _EVIDENCE, _PATTERN_SIGNALS)

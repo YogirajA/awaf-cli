@@ -12,7 +12,9 @@ This pillar has no cloud equivalent.
 - Is there an approval gate before irreversible actions?
 - Is the agent's action log auditable in real time?
 - Can scope be restricted at runtime without redeployment?
+"""
 
+_PATTERN_SIGNALS = """\
 PATTERN SIGNALS (advisory, not scored): use these to sharpen how you judge the criteria
 above; do not add new tally rows for them.
 - Plan & Execute: if the agent plans then executes, can the plan be inspected and interrupted before or between steps rather than only killed outright?
@@ -35,4 +37,4 @@ class ControllabilityAgent(PillarAgent):
 
     @property
     def system_prompt(self) -> str:
-        return self._build_system_prompt("Controllability", _WHAT, _EVIDENCE)
+        return self._build_system_prompt("Controllability", _WHAT, _EVIDENCE, _PATTERN_SIGNALS)
