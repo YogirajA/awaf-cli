@@ -1103,6 +1103,84 @@ def providers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# awaf eval-skill
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="eval-skill")
+@click.option(
+    "--skill-dir",
+    default="../awaf-skill",
+    show_default=True,
+    help="Path to the awaf-skill repo root (contains skills/awaf/).",
+)
+@click.option("--provider", default=None, metavar="PROVIDER", help="LLM provider override.")
+@click.option("--model", default=None, metavar="MODEL", help="Subject model that runs the skill.")
+@click.option(
+    "--judge-model",
+    default="claude-opus-4-5",
+    show_default=True,
+    metavar="MODEL",
+    help="Stronger model that grades each expectation.",
+)
+@click.option("--gate", default=0.85, show_default=True, type=float, help="Minimum pass rate.")
+@click.option(
+    "--output",
+    default="eval-metrics.json",
+    show_default=True,
+    metavar="PATH",
+    help="Where to write the metrics JSON.",
+)
+def eval_skill(
+    skill_dir: str,
+    provider: str | None,
+    model: str | None,
+    judge_model: str,
+    gate: float,
+    output: str,
+) -> None:
+    """Run the awaf skill eval cases and grade each expectation with a judge model."""
+    import json as _json
+    from dataclasses import asdict
+    from pathlib import Path
+
+    from awaf import evalgrader
+    from awaf.pricing import estimate_cost
+
+    subject_cfg = resolve_provider_config(cli_provider=provider, cli_model=model)
+    judge_cfg = resolve_provider_config(cli_provider=provider, cli_model=judge_model)
+    subject = get_provider(subject_cfg)
+    judge = get_provider(judge_cfg)
+    subject.validate_config()
+    judge.validate_config()
+
+    summary = evalgrader.grade_all(
+        subject,
+        judge,
+        Path(skill_dir),
+        estimate_cost_fn=estimate_cost,
+        subject_model=subject_cfg.model,
+        judge_model=judge_cfg.model,
+    )
+
+    with open(output, "w", encoding="utf-8") as fh:
+        fh.write(_json.dumps(asdict(summary), indent=2))
+
+    click.echo(
+        f"Pass rate: {summary.pass_rate:.0%} "
+        f"({summary.passed_expectations}/{summary.total_expectations} expectations)"
+    )
+    click.echo(f"Deterministic checks: {'PASS' if summary.deterministic_ok else 'FAIL'}")
+    click.echo(f"Metrics written to {output}")
+
+    if summary.pass_rate < gate or not summary.deterministic_ok:
+        click.echo(
+            f"FAIL: pass rate below gate {gate:.0%} or a deterministic check failed.", err=True
+        )
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # awaf history
 # ---------------------------------------------------------------------------
 
