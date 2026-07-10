@@ -114,7 +114,10 @@ def _parse_verdict(raw: str, expectation: str) -> Verdict:
         data = repaired if isinstance(repaired, dict) else {}
     if not isinstance(data, dict) or "passed" not in data:
         return Verdict(expectation, False, f"unparseable judge response: {raw[:80]!r}")
-    return Verdict(expectation, bool(data.get("passed", False)), str(data.get("reason", "")))
+    passed = data.get("passed")
+    if not isinstance(passed, bool):
+        return Verdict(expectation, False, f"judge 'passed' is not a boolean: {raw[:80]!r}")
+    return Verdict(expectation, passed, str(data.get("reason", "")))
 
 
 def grade_expectation(

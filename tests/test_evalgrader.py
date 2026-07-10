@@ -115,3 +115,46 @@ def test_malformed_judge_fails_closed(tmp_path: Path) -> None:
     bad_judge = FakeProvider(lambda sysp, usr: "not json")
     summary = evalgrader.grade_all(_subject(), bad_judge, tmp_path)
     assert summary.passed_expectations == 0
+
+
+def test_string_passed_fails_closed() -> None:
+    # A judge returning the boolean as a string is not trusted; fail closed either way.
+    assert evalgrader._parse_verdict('{"passed": "false", "reason": "no"}', "exp").passed is False
+    assert evalgrader._parse_verdict('{"passed": "true", "reason": "yes"}', "exp").passed is False
+
+
+def test_grade_all_excludes_skipped_from_deterministic_ok(tmp_path: Path) -> None:
+    base = tmp_path / "skills" / "awaf"
+    (base / "references").mkdir(parents=True)
+    (base / "SKILL.md").write_text("skill", encoding="utf-8")
+    (base / "references" / "output-format.md").write_text("fmt", encoding="utf-8")
+    (base / "evals").mkdir()
+    (base / "evals" / "evals.json").write_text(
+        json.dumps(
+            {
+                "skill_name": "awaf",
+                "evals": [
+                    {
+                        "id": 1,
+                        "prompt": "p",
+                        "expected_output": "",
+                        "files": [],
+                        "expectations": ["x"],
+                    },
+                    {
+                        "id": 2,
+                        "prompt": "p",
+                        "expected_output": "",
+                        "files": ["a.py"],
+                        "expectations": ["y"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = evalgrader.grade_all(_subject(), _judge(True), tmp_path)
+    # The file-supplying case is skipped, so only case 1's passing deterministic checks count.
+    assert summary.deterministic_ok is True
+    # The skipped case contributes no verdicts.
+    assert summary.total_expectations == 1
