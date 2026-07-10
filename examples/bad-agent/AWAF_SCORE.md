@@ -1,6 +1,6 @@
 # AWAF Assessment — Q&A Agent
 
-**AWAF v1.3 | 2026-03-15**
+**AWAF v1.4 | 2026-03-15**
 
 ---
 
