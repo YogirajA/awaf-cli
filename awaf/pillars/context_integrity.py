@@ -15,6 +15,12 @@ Stale context is corrupted reasoning. This pillar has no cloud equivalent.
   offload context before approaching window limits, rather than silently degrading as the window fills?
 - Is agent state explicitly persisted during long sessions (scratchpad, memory store, or equivalent), not just accumulated in context?
 - Are tool response outputs filtered to relevant fields before re-entering context (not just input context pruned)?
+
+PATTERN SIGNALS (advisory, not scored): use these to sharpen how you judge the criteria
+above; do not add new tally rows for them.
+- Memory-Augmented Generation: is there a compression or retrieval strategy, or does context grow unbounded?
+- Tool-Augmented Scratchpad: is the scratchpad trace bounded and persisted for debugging?
+- Reflexion: does the agent write outcomes back to a memory store for reuse rather than discarding them?
 """
 
 _EVIDENCE = """\

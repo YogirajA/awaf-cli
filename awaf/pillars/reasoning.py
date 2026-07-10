@@ -11,6 +11,14 @@ A server does not hallucinate. Agents do. This pillar has no cloud equivalent.
 - Is hallucination rate measured?
 - Does the agent surface uncertainty rather than fabricating confidence?
 - Is there provenance tracking on tool results?
+
+PATTERN SIGNALS (advisory, not scored): use these to sharpen how you judge the criteria
+above; do not add new tally rows for them.
+- Chain of Thought: is structured reasoning visible before answers, or are outputs merely asserted?
+- ReAct: are tool calls preceded by reasoning, and is each observation incorporated before the next action?
+- Plan & Execute: is planning separated from execution so the plan can be reviewed on its own?
+- Reflexion: are outcome critiques written to memory and reused in later runs?
+- Self-Consistency: if sample-and-vote is used, is N justified and applied selectively to ambiguous outputs rather than naively to everything?
 """
 
 _EVIDENCE = """\
