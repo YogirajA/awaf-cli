@@ -32,6 +32,17 @@ def test_corrupt_cache_file_returns_none(tmp_path) -> None:
     assert load_cached_graph("bad", str(d)) is None
 
 
+def test_wrong_shape_cache_file_returns_none(tmp_path) -> None:
+    # Valid JSON but the wrong shape (a list, or nodes-as-strings) makes graph_from_dict
+    # raise AttributeError/TypeError. load_cached_graph must treat it as a miss, never raise.
+    d = tmp_path / "graph_cache"
+    d.mkdir()
+    (d / "list.json").write_text("[1, 2, 3]", encoding="utf-8")
+    (d / "badnodes.json").write_text('{"nodes": ["x"], "edges": [], "files": []}', encoding="utf-8")
+    assert load_cached_graph("list", str(d)) is None
+    assert load_cached_graph("badnodes", str(d)) is None
+
+
 def test_lru_prune_keeps_most_recent(tmp_path) -> None:
     d = str(tmp_path / "graph_cache")
     # Create 5 cache files without pruning. Real mtimes can tie for files written in a

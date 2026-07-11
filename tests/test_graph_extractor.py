@@ -54,6 +54,22 @@ def test_extract_list_json_returns_none() -> None:
     assert extract_graph(_provider("[1, 2, 3]"), SCANNED) is None
 
 
+def test_extract_empty_graph_falls_back() -> None:
+    # No nodes and every scanned file defaults to role "other" -> no pillar gets any
+    # evidence, strictly worse than the raw dump. Must fall back (return None).
+    empty = '{"nodes": [], "edges": [], "files": []}'
+    assert extract_graph(_provider(empty), SCANNED) is None
+
+
+def test_extract_manifest_only_graph_is_kept() -> None:
+    # No nodes, but a file carries a real role -> the manifest still routes slices to
+    # cloud pillars, so this is usable evidence and must NOT fall back.
+    manifest = '{"nodes": [], "edges": [], "files": [{"path": "p.py", "role": "config"}]}'
+    g = extract_graph(_provider(manifest), SCANNED)
+    assert g is not None
+    assert any(f.role == "config" for f in g.files)
+
+
 def test_extract_non_provider_error_returns_none() -> None:
     # A non-ProviderError SDK exception (e.g. a raw network error the adapter did not wrap)
     # must not escape extract_graph. The broad fallback boundary turns it into None.

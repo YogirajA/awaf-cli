@@ -99,7 +99,16 @@ def extract_graph(
         if data is None:
             logger.warning("Graph extraction returned unparseable JSON; falling back to raw dump.")
             return None
-        return finalize_graph(graph_from_dict(data), scanned_files)
+        graph = finalize_graph(graph_from_dict(data), scanned_files)
+        # A graph with no nodes and only "other"-role files gives every pillar empty
+        # evidence (no anchor slices, no role slices), strictly worse than the raw dump.
+        # Treat that degenerate result as a failure and fall back.
+        if not graph.nodes and not any(f.role != "other" for f in graph.files):
+            logger.warning(
+                "Graph extraction produced no usable evidence; falling back to raw dump."
+            )
+            return None
+        return graph
     except Exception as exc:
         # Broad by design: extraction is optional. Any error degrades to the raw-dump path
         # rather than crashing awaf run. Same convention as store_graph in awaf/graph.py.

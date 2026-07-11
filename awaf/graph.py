@@ -294,10 +294,14 @@ def _cache_file(content_hash: str, cache_dir: str) -> str:
 
 
 def load_cached_graph(content_hash: str, cache_dir: str) -> ArchitectureGraph | None:
+    # Broad by design (never raises): a missing/unreadable file (OSError), malformed JSON
+    # (ValueError), or a valid-JSON-but-wrong-shape cache file (graph_from_dict raising
+    # AttributeError/TypeError on a tampered or format-drifted file) all mean "no usable
+    # cache" -> treat as a miss. Same best-effort convention as store_graph.
     try:
         with open(_cache_file(content_hash, cache_dir), encoding="utf-8") as fh:
             return graph_from_json(fh.read())
-    except (OSError, ValueError):
+    except Exception:
         return None
 
 
