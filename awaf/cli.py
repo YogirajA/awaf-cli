@@ -853,7 +853,7 @@ def run(
             sev = f.get("severity", "")
             pillar = f.get("pillar", "")
             detail = f.get("detail", "")
-            status = lifecycle.statuses.get(finding_signature(f), "")
+            status = lifecycle.statuses.get(finding_signature(f), "") if _prev_records else ""
             tag = f"[{status.upper()}] " if status else ""
             _print_wrapped(f"  [{sev:<8}]  {pillar:<18}  {tag}", detail)
         click.echo(_SEP)
@@ -942,10 +942,14 @@ def run(
             all_improvements=all_improvements,
             provider_name=config.provider_name,
             effective_model=effective_model,
-            finding_status={
-                finding_signature(f): lifecycle.statuses.get(finding_signature(f), "")
-                for f in all_findings
-            },
+            finding_status=(
+                {
+                    finding_signature(f): lifecycle.statuses.get(finding_signature(f), "")
+                    for f in all_findings
+                }
+                if _prev_records
+                else {}
+            ),
         )
         click.echo(f"  Artifact: {out}")
 
@@ -1453,7 +1457,8 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
 
     _prev = _get_recent(rec.project_name or project_name, limit=2)
     _life: LifecycleResult | None = None
-    if len(_prev) >= 2:
+    if len(_prev) >= 2 and _prev[0].id == rec.id:
+        # rec is the latest run; _prev[1] is the genuine prior run
         try:
             _prev_findings: list[dict[str, Any]] = _json.loads(_prev[1].findings)
         except (ValueError, TypeError):

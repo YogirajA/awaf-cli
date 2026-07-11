@@ -41,3 +41,12 @@ def test_cli_overrides_env_and_toml(tmp_path, monkeypatch) -> None:  # type: ign
     toml.write_text('[telemetry]\nenabled = true\npath = "toml.jsonl"\n', encoding="utf-8")
     cfg = resolve_telemetry_config(cli_trace="cli.jsonl", toml_path=str(toml))
     assert cfg.trace_path == "cli.jsonl"
+
+
+def test_env_false_overrides_toml_enabled(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("AWAF_TELEMETRY_ENABLED", "false")
+    monkeypatch.delenv("AWAF_TELEMETRY_PATH", raising=False)
+    toml = tmp_path / "awaf.toml"
+    toml.write_text('[telemetry]\nenabled = true\npath = "t.jsonl"\n', encoding="utf-8")
+    cfg = resolve_telemetry_config(toml_path=str(toml))
+    assert cfg.enabled is False

@@ -24,7 +24,9 @@ class PillarResult:
     name: str
     score: float  # 0-100
     confidence: str  # verified | partial | self_reported
-    findings: list[dict[str, Any]] = field(default_factory=list)  # [{"severity":..., "detail":...}]
+    findings: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{"title","severity","detail","pillar","fingerprint","file","line"}]
     recommendations: list[dict[str, Any]] = field(default_factory=list)  # [{"detail":...}]
     evidence_gaps: list[str] = field(default_factory=list)
     improve_suggestions: list[str] = field(default_factory=list)

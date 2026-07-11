@@ -57,3 +57,8 @@ def test_write_failure_is_swallowed(tmp_path: Path) -> None:
     # An unwritable path (a directory) must not raise into the caller.
     w = TraceWriter(str(tmp_path))  # tmp_path is a directory, not a file
     w.pillar("r", PillarResult(name="A", score=0.0, confidence="partial"))  # no exception
+
+
+def test_non_serializable_event_is_swallowed(tmp_path: Path) -> None:
+    w = TraceWriter(str(tmp_path / "t.jsonl"))
+    w._append({"bad": object()})  # object() is not JSON-serializable; must not raise

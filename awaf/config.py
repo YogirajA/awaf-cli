@@ -147,11 +147,12 @@ def resolve_telemetry_config(
     env_path = os.environ.get("AWAF_TELEMETRY_PATH", "")
 
     path = cli_trace or env_path or str(tel.get("path", "")) or ""
-    enabled = bool(
-        cli_trace
-        or (env_enabled.lower() in {"1", "true", "yes"})
-        or bool(tel.get("enabled", False))
-    )
+    if cli_trace:
+        enabled = True
+    elif env_enabled:  # env explicitly set: it wins over toml, on or off
+        enabled = env_enabled.lower() in {"1", "true", "yes"}
+    else:
+        enabled = bool(tel.get("enabled", False))
     if enabled and not path:
         path = "awaf-trace.jsonl"
     return TelemetryConfig(enabled=enabled, trace_path=path)

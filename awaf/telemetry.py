@@ -40,7 +40,7 @@ class TraceWriter:
         try:
             with open(self.path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(event) + "\n")
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
             logger.warning("telemetry trace write failed (%s): %s", self.path, exc)
 
     def pillar(self, run_id: str, r: PillarResult) -> None:
