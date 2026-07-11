@@ -34,8 +34,17 @@ def test_corrupt_cache_file_returns_none(tmp_path) -> None:
 
 def test_lru_prune_keeps_most_recent(tmp_path) -> None:
     d = str(tmp_path / "graph_cache")
+    # Create 5 cache files without pruning. Real mtimes can tie for files written in a
+    # tight loop (coarse filesystem resolution), so stamp deterministic increasing mtimes:
+    # h0 oldest .. h4 newest. This keeps the production mtime-LRU logic but makes the
+    # ordering the test asserts unambiguous.
     for i in range(5):
-        store_graph(_g(f"h{i}"), d, max_keep=3)
+        store_graph(_g(f"h{i}"), d, max_keep=99)
+    base = 1_000_000_000
+    for i in range(5):
+        os.utime(os.path.join(d, f"h{i}.json"), (base + i, base + i))
+    # Storing a 6th (freshly written, newest) file with max_keep=3 prunes to the 3 most
+    # recent by mtime: h5 (now) > h4 > h3; h2, h1, h0 are evicted.
+    store_graph(_g("h5"), d, max_keep=3)
     remaining = {f[:-5] for f in os.listdir(d) if f.endswith(".json")}
-    assert len(remaining) == 3
-    assert "h4" in remaining  # newest kept
+    assert remaining == {"h5", "h4", "h3"}
