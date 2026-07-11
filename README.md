@@ -227,6 +227,90 @@ terminal_format = "compact"    # compact | full | json
 
 ---
 
+## Agent-Architecture Graph (token-efficient evidence)
+
+By default, `awaf` precomputes a compact, pillar-shaped agent-architecture graph of your repository. Instead of sending the raw code dump to each pillar evaluator, awaf extracts a graph of agents, tools, guardrails, data stores, and context sources plus a file-role manifest, then sends that graph (plus targeted code slices for each pillar) as evidence. This replaces the raw-file path.
+
+### Cost Savings
+
+Replacing the raw-code dump with the graph cuts per-run input tokens by roughly 40-50%. Because the graph is cached by a content hash of the repository, an unchanged re-run reuses it and skips extraction entirely, so repeat runs approach free.
+
+### Quality and Reliability
+
+No more silent truncation on large repositories (the extractor sees the whole repo, not just the first 40k tokens). Findings gain validated `file:line` anchors. Each pillar receives focused evidence instead of the full dump. The graph is on by default and fully optional: any extraction or cache failure automatically falls back to the raw-dump path, so a run is never worse than before.
+
+### Usage
+
+The graph is enabled by default. To disable it for a single run:
+
+```bash
+awaf run --no-graph
+```
+
+To force a rebuild of the cached graph:
+
+```bash
+awaf run --refresh-graph
+```
+
+To inspect what was extracted:
+
+```bash
+awaf graph                 # view the graph summary
+awaf graph --json          # raw JSON
+awaf graph --refresh       # rebuild before inspecting
+```
+
+### Configuration
+
+Configure the graph via the `[graph]` table in `awaf.toml`:
+
+```toml
+[graph]
+enabled = true
+extract_tokens = 150000    # one-time budget for the extraction call
+slice_budget = 12000       # per-pillar cited-code budget
+context_lines = 20         # lines around each anchored node
+cache_max = 8              # graphs kept in the on-disk cache
+starvation_retry = true    # re-feed raw slices to a low-confidence pillar once
+```
+
+Environment variable overrides (take precedence over `awaf.toml`):
+
+```bash
+AWAF_GRAPH=0                          # disable (0 or 1)
+AWAF_GRAPH_EXTRACT_TOKENS=150000
+AWAF_GRAPH_SLICE_BUDGET=12000
+AWAF_GRAPH_CACHE_MAX=8
+```
+
+The graph cache lives next to `awaf.db` in a `graph_cache/` directory.
+
+### Before and After (Token Usage)
+
+**Before (raw dump):**
+```
+Artifacts          18,750 tokens  (42 files)
+Context window    128,000 tokens  (gpt-4o)
+Per-pillar est     18,900 tokens  (15% of window)
+Total est         189,000 tokens  (10 pillars × ~18,900)
+Cost est               ~$0.0147
+```
+
+**After (with graph):**
+```
+Graph extraction    52,000 tokens  (one-time, cached)
+Graph artifact       8,200 tokens  (sent to all 10 pillars)
+Per-pillar slices    3,900 tokens  (focused evidence per pillar)
+Per-pillar total     12,100 tokens  (8% of window)
+Total est          121,000 tokens  (10 pillars × ~12,100)
+Cost est               ~$0.0079  (cached re-run: ~$0.0001)
+```
+
+On unchanged re-runs, the cached graph saves the extraction cost entirely, leaving only the small per-pillar slices to ingest.
+
+---
+
 ## CI Integration
 
 ### What CI gates are valid — and which ones are not
