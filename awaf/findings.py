@@ -48,10 +48,12 @@ def finding_signature(finding: dict[str, Any]) -> str:
     fp = finding.get("fingerprint")
     if isinstance(fp, str) and fp:
         return fp
-    pillar = str(finding.get("pillar", ""))
-    file = str(finding.get("file", ""))
+    # `or ""` guards against a JSON null value (key present, value None), where
+    # str(None) would otherwise yield the literal "None".
+    pillar = str(finding.get("pillar") or "")
+    file = str(finding.get("file") or "")
     # Legacy findings have no title; fall back to the free-text detail.
-    title = str(finding.get("title", "")) or str(finding.get("detail", ""))
+    title = str(finding.get("title") or "") or str(finding.get("detail") or "")
     return fingerprint(pillar, title, file)
 
 

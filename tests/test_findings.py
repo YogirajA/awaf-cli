@@ -84,3 +84,10 @@ def test_classify_matches_reworded_title_against_legacy() -> None:
     # current fingerprint derives from title -> normalize("missing auth admin endpoint")
     # both normalize to the same token set, so they match as recurring
     assert result.counts == (0, 1, 0)
+
+
+def test_finding_signature_handles_null_title() -> None:
+    # A JSON null title (value None) must fall back to detail, not become "None".
+    a = finding_signature({"pillar": "Security", "title": None, "detail": "missing auth"})
+    b = finding_signature({"pillar": "Security", "detail": "missing auth"})
+    assert a == b
