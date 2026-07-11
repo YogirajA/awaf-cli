@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 from awaf.pillars.base import _PATTERN_GLOSSARY
 from awaf.pillars.foundation import FoundationAgent
+from awaf.providers.base import ProviderResponse
 
 _VALID_RESPONSE = {
     "score": 75,
@@ -115,3 +117,40 @@ def test_pillar_result_has_latency_field() -> None:
     from awaf.pillars.base import PillarResult
 
     assert PillarResult(name="X", score=0.0, confidence="partial").latency_ms == 0
+
+
+_EVAL_JSON = (
+    '{"score": 80, "confidence": "verified", '
+    '"findings": [{"title": "bad-thing", "severity": "High", "detail": "d", '
+    '"file": "a.py", "line": 999}], "recommendations": [], "evidence_gaps": []}'
+)
+
+
+def _prov(content: str) -> MagicMock:
+    p = MagicMock()
+    p.complete.return_value = ProviderResponse(
+        content=content, input_tokens=1, output_tokens=1, model="m", provider="x", latency_ms=1
+    )
+    return p
+
+
+def test_extra_user_context_appended_to_user_prompt() -> None:
+    p = _prov(_EVAL_JSON)
+    FoundationAgent().evaluate(p, "GRAPH-BLOCK", extra_user_context="## Cited code slices\nX")
+    args = p.complete.call_args.args
+    # complete(system_prompt, user_prompt, artifact_content)
+    assert args[2] == "GRAPH-BLOCK"  # artifact_content is the shared graph block
+    assert "Cited code slices" in args[1]  # slices ride in the user prompt
+
+
+def test_finding_line_nulled_when_out_of_range() -> None:
+    p = _prov(_EVAL_JSON)
+    r = FoundationAgent().evaluate(p, "GRAPH", files_by_len={"a.py": 10})
+    assert r.findings[0]["line"] is None  # 999 > 10 -> nulled
+    assert r.findings[0]["file"] == "a.py"
+
+
+def test_finding_line_kept_when_no_files_by_len() -> None:
+    p = _prov(_EVAL_JSON.replace("999", "5"))
+    r = FoundationAgent().evaluate(p, "GRAPH")  # files_by_len=None -> no validation
+    assert r.findings[0]["line"] == 5

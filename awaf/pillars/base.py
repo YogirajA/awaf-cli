@@ -9,6 +9,7 @@ from typing import Any
 from json_repair import repair_json
 
 from awaf.findings import fingerprint as _fingerprint
+from awaf.graph import validate_anchor
 from awaf.providers.base import LLMProvider
 from awaf.retry import with_retry
 
@@ -86,6 +87,11 @@ Place this breakdown in the "tally" field. The score field MUST equal the comput
 Do NOT adjust the score holistically after computing the tally.
 """
 
+_EVIDENCE_NOTE = (
+    "Evidence may arrive as an agent-architecture graph plus cited code slices, or as raw "
+    "files. Treat both as equal evidence; cite file:line from the graph or slices when you can."
+)
+
 _HAIKU_SUFFIX = """\
 
 MODEL GUIDANCE (compact mode): Be concise. One sentence per tally entry. No extended
@@ -148,17 +154,23 @@ class PillarAgent(ABC):
     @abstractmethod
     def system_prompt(self) -> str: ...
 
-    def _structure_finding(self, f: dict[str, Any]) -> dict[str, Any]:
+    def _structure_finding(
+        self, f: dict[str, Any], files_by_len: dict[str, int] | None = None
+    ) -> dict[str, Any]:
         """Attach pillar + fingerprint and normalize optional file/line onto a finding.
 
         `or ""` guards against JSON null values (str(None) would yield "None").
         The bool check excludes True/False, which are int subclasses in Python.
+        When `files_by_len` is provided, the line is validated against it and nulled
+        if it falls outside the file's actual range (or the file is unknown).
         """
         title = str(f.get("title") or "").strip()
         file = str(f.get("file") or "").strip()
         line = f.get("line")
         if not isinstance(line, int) or isinstance(line, bool):
             line = None
+        if files_by_len is not None:
+            line = validate_anchor(file, line, files_by_len)
         detail = str(f.get("detail") or "")
         return {
             "title": title,
@@ -176,16 +188,24 @@ class PillarAgent(ABC):
         artifact_content: str,
         max_retries: int = 3,
         model: str = "",
+        extra_user_context: str = "",
+        files_by_len: dict[str, int] | None = None,
     ) -> PillarResult:
         """
         Call the provider, parse the JSON response, and return a PillarResult.
         Retries are handled by with_retry(). Parse failures return a low-confidence result.
+
+        `extra_user_context` (e.g. cited code slices) is appended to the user prompt so it
+        does not disturb the shared `artifact_content` cache block. `files_by_len`, when
+        provided, is used to validate finding file:line anchors.
         """
         system = self.system_prompt
         if "haiku" in model.lower():
             system = system + _HAIKU_SUFFIX
 
         user_prompt = f"Evaluate the provided artifacts against the {self.name} pillar."
+        if extra_user_context:
+            user_prompt = f"{user_prompt}\n\n{extra_user_context}"
 
         response = with_retry(
             provider,
@@ -195,7 +215,7 @@ class PillarAgent(ABC):
             max_retries=max_retries,
         )
 
-        result = self._parse_response(response.content)
+        result = self._parse_response(response.content, files_by_len)
         result.input_tokens = response.input_tokens
         result.output_tokens = response.output_tokens
         result.cache_creation_input_tokens = response.cache_creation_input_tokens
@@ -203,7 +223,7 @@ class PillarAgent(ABC):
         result.latency_ms = response.latency_ms
         return result
 
-    def _parse_response(self, raw: str) -> PillarResult:
+    def _parse_response(self, raw: str, files_by_len: dict[str, int] | None = None) -> PillarResult:
         """Parse the LLM's JSON response into a PillarResult."""
         try:
             # Strip accidental markdown fences
@@ -234,7 +254,8 @@ class PillarAgent(ABC):
                 confidence="self_reported",
                 findings=[
                     self._structure_finding(
-                        {"severity": "High", "detail": f"LLM response could not be parsed: {exc}"}
+                        {"severity": "High", "detail": f"LLM response could not be parsed: {exc}"},
+                        files_by_len,
                     )
                 ],
                 evidence_gaps=["LLM response was not valid JSON; re-run to retry"],
@@ -245,7 +266,7 @@ class PillarAgent(ABC):
             name=self.name,
             score=float(data.get("score", 0)),
             confidence=str(data.get("confidence", "self_reported")),
-            findings=[self._structure_finding(f) for f in data.get("findings", [])],
+            findings=[self._structure_finding(f, files_by_len) for f in data.get("findings", [])],
             recommendations=list(data.get("recommendations", [])),
             evidence_gaps=list(data.get("evidence_gaps", [])),
             improve_suggestions=list(data.get("improve_suggestions", [])),
@@ -269,7 +290,7 @@ class PillarAgent(ABC):
             f"You are an expert AI systems architect evaluating production readiness.\n"
             f"Assess the provided artifacts against the AWAF v1.4 **{pillar_name}** pillar.\n\n"
             f"## What to Assess\n{what_to_assess}\n\n"
-            f"## Evidence Sources\n{evidence_sources}\n\n"
+            f"## Evidence Sources\n{evidence_sources}\n{_EVIDENCE_NOTE}\n\n"
             f"{_SCORING_GUIDE}\n"
             f"{_CONFIDENCE_GUIDE}\n"
             f"{_RULES}\n"
