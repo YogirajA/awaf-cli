@@ -25,6 +25,19 @@ class TelemetryConfig:
     trace_path: str = ""
 
 
+@dataclass
+class GraphConfig:
+    """Code-graph evidence settings (awaf.toml [graph] section). Enabled by default."""
+
+    enabled: bool = True
+    refresh: bool = False
+    extract_tokens: int = 150_000
+    slice_budget: int = 12_000
+    context_lines: int = 20
+    cache_max: int = 8
+    starvation_retry: bool = True
+
+
 # Environment variable names per provider
 _API_KEY_ENV: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -156,3 +169,34 @@ def resolve_telemetry_config(
     if enabled and not path:
         path = "awaf-trace.jsonl"
     return TelemetryConfig(enabled=enabled, trace_path=path)
+
+
+def resolve_graph_config(
+    cli_graph: bool | None = None,
+    cli_refresh: bool = False,
+    toml_path: str = "awaf.toml",
+) -> GraphConfig:
+    """Resolve graph settings. Precedence for `enabled`: CLI > env > awaf.toml > default (True)."""
+    toml_data = _read_toml(toml_path)
+    table = toml_data.get("graph", {})
+    cfg = GraphConfig()
+
+    env_enabled = os.environ.get("AWAF_GRAPH")
+    if cli_graph is not None:
+        cfg.enabled = cli_graph
+    elif env_enabled is not None:
+        cfg.enabled = env_enabled.strip().lower() in {"1", "true", "yes"}
+    else:
+        cfg.enabled = bool(table.get("enabled", True))
+
+    cfg.refresh = bool(cli_refresh)
+    cfg.extract_tokens = int(
+        os.environ.get("AWAF_GRAPH_EXTRACT_TOKENS", table.get("extract_tokens", 150_000))
+    )
+    cfg.slice_budget = int(
+        os.environ.get("AWAF_GRAPH_SLICE_BUDGET", table.get("slice_budget", 12_000))
+    )
+    cfg.cache_max = int(os.environ.get("AWAF_GRAPH_CACHE_MAX", table.get("cache_max", 8)))
+    cfg.context_lines = int(table.get("context_lines", 20))
+    cfg.starvation_retry = bool(table.get("starvation_retry", True))
+    return cfg
