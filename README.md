@@ -237,7 +237,7 @@ Replacing the raw-code dump with the graph cuts per-run input tokens by roughly 
 
 ### Quality and Reliability
 
-No more silent truncation on large repositories (the extractor sees the whole repo, not just the first 40k tokens). Findings gain validated `file:line` anchors. Each pillar receives focused evidence instead of the full dump. The graph is on by default and fully optional: any extraction or cache failure automatically falls back to the raw-dump path, so a run is never worse than before.
+No more silent truncation on large repositories (the extractor sees the whole repo, not just the first 40k tokens). Findings gain validated `file:line` anchors (validated against the analyzed view of each file, which awaf minifies, so line numbers are close but not always exactly the raw-source line). Each pillar receives focused evidence instead of the full dump. The graph is on by default and fully optional: any extraction or cache failure automatically falls back to the raw-dump path, so a run is never worse than before.
 
 ### Usage
 
