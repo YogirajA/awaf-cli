@@ -5,6 +5,7 @@ import os
 import statistics
 import sys
 import textwrap
+import time
 import tomllib
 from datetime import UTC
 from typing import Any
@@ -419,6 +420,13 @@ def cli() -> None:
     type=click.IntRange(min=1),
     help="Run N assessments and average results. Use with --force for variance checks.",
 )
+@click.option(
+    "--trace",
+    "trace",
+    default=None,
+    metavar="PATH",
+    help="Write a JSONL run-telemetry trace to PATH (opt-in; also via [telemetry] or AWAF_TELEMETRY_*).",
+)
 def run(
     paths: tuple[str, ...],
     ci: bool,
@@ -434,6 +442,7 @@ def run(
     allow_partial_scan: bool,
     force: bool,
     runs: int,
+    trace: str | None,
 ) -> None:
     """Assess agent architecture against AWAF v1.4 across 10 pillars."""
     import json as _json
@@ -470,6 +479,13 @@ def run(
         sys.exit(2)
 
     effective_model = config.model or llm_provider.default_model
+
+    from awaf.config import resolve_telemetry_config
+    from awaf.telemetry import TraceWriter, new_run_id
+
+    _telemetry = resolve_telemetry_config(cli_trace=trace)
+    _run_id = new_run_id()
+    _t0 = time.monotonic()
 
     # Git context
     commit_hash = ""
@@ -801,9 +817,7 @@ def run(
     all_gaps = []
     all_improvements = []
     for r in assessment.pillar_results:
-        for f in r.findings:
-            f["pillar"] = r.name
-            all_findings.append(f)
+        all_findings.extend(r.findings)
         for rec in r.recommendations:
             rec["pillar"] = r.name
             all_recs.append(rec)
@@ -814,6 +828,24 @@ def run(
     _sev = {"Critical": 0, "High": 1, "Medium": 2}
     all_findings.sort(key=lambda f: _sev.get(f.get("severity", ""), 3))
 
+    # Lifecycle vs the previous run — loaded BEFORE this run's rows are saved,
+    # so _prev_records[0] is the genuine previous run.
+    from awaf.db import get_recent_assessments
+    from awaf.findings import classify_findings, finding_signature
+
+    _prev_records = get_recent_assessments(project_name, limit=1)
+    _previous_findings: list[dict[str, Any]] = []
+    if _prev_records:
+        try:
+            _previous_findings = _json.loads(_prev_records[0].findings)
+        except (ValueError, TypeError):
+            _previous_findings = []
+    lifecycle = classify_findings(all_findings, _previous_findings)
+    if all_findings and _prev_records:
+        n, rec_, res = lifecycle.counts
+        click.echo()
+        click.echo(f"  Findings since last run: {n} new, {rec_} recurring, {res} resolved")
+
     if all_findings:
         click.echo()
         click.echo("  FINDINGS  (ordered by severity)")
@@ -821,7 +853,9 @@ def run(
             sev = f.get("severity", "")
             pillar = f.get("pillar", "")
             detail = f.get("detail", "")
-            _print_wrapped(f"  [{sev:<8}]  {pillar:<18}  ", detail)
+            status = lifecycle.statuses.get(finding_signature(f), "")
+            tag = f"[{status.upper()}] " if status else ""
+            _print_wrapped(f"  [{sev:<8}]  {pillar:<18}  {tag}", detail)
         click.echo(_SEP)
 
     if all_recs:
@@ -908,8 +942,40 @@ def run(
             all_improvements=all_improvements,
             provider_name=config.provider_name,
             effective_model=effective_model,
+            finding_status={
+                finding_signature(f): lifecycle.statuses.get(finding_signature(f), "")
+                for f in all_findings
+            },
         )
         click.echo(f"  Artifact: {out}")
+
+    # Emit JSONL run telemetry when enabled — informational only, never gates the exit code.
+    if _telemetry.enabled:
+        _writer = TraceWriter(_telemetry.trace_path)
+        for r in assessment.pillar_results:
+            _writer.pillar(_run_id, r)
+        _n, _rec, _res = lifecycle.counts
+        _writer.run(
+            _run_id,
+            {
+                "project": project_name,
+                "commit": commit_hash,
+                "branch": branch,
+                "provider": config.provider_name,
+                "model": effective_model,
+                "overall_score": assessment.overall_score,
+                "foundation_passed": assessment.foundation_passed,
+                "total_input_tokens": assessment.total_input_tokens,
+                "total_output_tokens": assessment.total_output_tokens,
+                "estimated_cost_usd": assessment.estimated_cost_usd,
+                "wall_ms": int((time.monotonic() - _t0) * 1000),
+                "pillar_count": len(assessment.pillar_results),
+                "new_findings": _n,
+                "recurring_findings": _rec,
+                "resolved_findings": _res,
+            },
+        )
+        click.echo(f"  Trace: {_telemetry.trace_path}")
 
     # Threshold checks → exit code
     tier2_scores = [
@@ -1468,10 +1534,12 @@ def _write_artifact(
     all_improvements: list[str],
     provider_name: str,
     effective_model: str,
+    finding_status: dict[str, str] | None = None,
 ) -> None:
     """Write a plain-text artifact report to *path*."""
     import datetime
 
+    from awaf.findings import finding_signature
     from awaf.pillars import AssessmentResult
 
     def _asc(text: str) -> str:
@@ -1598,7 +1666,9 @@ def _write_artifact(
             sev = f.get("severity", "")
             pillar = f.get("pillar", "")
             detail = _asc(f.get("detail", ""))
-            prefix = f"  [{sev:<8}]  {pillar:<18}  "
+            status = (finding_status or {}).get(finding_signature(f), "")
+            tag = f"[{status.upper()}] " if status else ""
+            prefix = f"  [{sev:<8}]  {pillar:<18}  {tag}"
             wrapped = textwrap.wrap(detail, width=78 - len(prefix))
             a(prefix + (wrapped[0] if wrapped else ""))
             cont = " " * len(prefix)
