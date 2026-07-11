@@ -29,6 +29,11 @@ def db_path() -> str:
     return _db_url().removeprefix("sqlite:///")
 
 
+def graph_cache_dir() -> str:
+    """Directory for the code-graph cache, co-located next to the SQLite db file."""
+    return os.path.join(os.path.dirname(db_path()), "graph_cache")
+
+
 class _Base(DeclarativeBase):
     pass
 

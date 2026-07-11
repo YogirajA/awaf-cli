@@ -467,7 +467,7 @@ def run(
     import json as _json
     import subprocess
 
-    from awaf.db import db_path, save_assessment
+    from awaf.db import graph_cache_dir, save_assessment
     from awaf.ingestor import ingest, ingest_files
     from awaf.pillars import run_assessment
     from awaf.pricing import estimate_cost
@@ -744,20 +744,30 @@ def run(
     architecture_graph = None
     scanned_files_map: dict[str, str] = {}
     if graph_cfg.enabled:
-        scanned_pairs = ingest_files(
-            paths=scan_paths,
-            exclude_patterns=toml_data.get("files", {}).get("exclude", []),
-        )
-        cache_dir = os.path.join(os.path.dirname(db_path()), "graph_cache")
-        architecture_graph = get_graph(
-            llm_provider,
-            scanned_pairs,
-            cache_dir,
-            refresh=graph_cfg.refresh,
-            extract_tokens=graph_cfg.extract_tokens,
-            cache_max=graph_cfg.cache_max,
-        )
-        scanned_files_map = dict(scanned_pairs)
+        try:
+            scanned_pairs = ingest_files(
+                paths=scan_paths,
+                exclude_patterns=toml_data.get("files", {}).get("exclude", []),
+            )
+            architecture_graph = get_graph(
+                llm_provider,
+                scanned_pairs,
+                graph_cache_dir(),
+                refresh=graph_cfg.refresh,
+                extract_tokens=graph_cfg.extract_tokens,
+                cache_max=graph_cfg.cache_max,
+            )
+            scanned_files_map = dict(scanned_pairs)
+        except Exception as exc:
+            # Graph evidence is optional. Any unexpected failure degrades to the raw-dump
+            # path rather than breaking the run (get_graph already never raises; this guards
+            # ingest_files and any future regression in the graph modules).
+            click.echo(
+                f"  ⚠ Graph evidence unavailable ({exc}); using raw artifact evidence.",
+                err=True,
+            )
+            architecture_graph = None
+            scanned_files_map = {}
 
     # Run pillar agents (single run or multi-run loop)
     def _on_pillar_start(name: str) -> None:
@@ -1079,7 +1089,7 @@ def run(
 )
 def graph(path: str, as_json: bool, refresh: bool) -> None:
     """Extract and inspect the code-architecture graph for PATH (default: current directory)."""
-    from awaf.db import db_path
+    from awaf.db import graph_cache_dir
     from awaf.graph import content_hash, load_cached_graph
     from awaf.ingestor import ingest_files
 
@@ -1101,7 +1111,7 @@ def graph(path: str, as_json: bool, refresh: bool) -> None:
         click.echo(f"No files found to analyze under {path}.", err=True)
         sys.exit(2)
 
-    cache_dir = os.path.join(os.path.dirname(db_path()), "graph_cache")
+    cache_dir = graph_cache_dir()
 
     was_cached = False
     if not refresh:

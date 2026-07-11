@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
 from awaf.cli import cli
 from awaf.graph import ArchitectureGraph, FileEntry, GraphNode
+
+
+@pytest.fixture(autouse=True)
+def _stub_provider(monkeypatch):  # type: ignore[no-untyped-def]
+    # The `graph` command resolves a real provider before it reaches the (patched) get_graph.
+    # Stub the provider layer so these tests need no ambient API-key/.env to run.
+    monkeypatch.setattr("awaf.cli.resolve_provider_config", lambda *a, **k: object())
+    monkeypatch.setattr("awaf.cli.get_provider", lambda *a, **k: object())
 
 
 def _graph() -> ArchitectureGraph:
