@@ -8,6 +8,7 @@ from typing import Any
 
 from json_repair import repair_json
 
+from awaf.findings import fingerprint as _fingerprint
 from awaf.providers.base import LLMProvider
 from awaf.retry import with_retry
 
@@ -31,6 +32,7 @@ class PillarResult:
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    latency_ms: int = 0
     skipped: bool = False
     skip_reason: str = ""
     not_applicable: bool = False
@@ -108,7 +110,7 @@ Return ONLY valid JSON (no markdown fences, no commentary before or after) with 
   "score": <integer 0-100, must equal round(passed_pts / total_pts * 100) from tally>,
   "confidence": "<verified|partial|self_reported>",
   "findings": [
-    {"severity": "<Critical|High|Medium>", "detail": "<specific finding with evidence citation>"}
+    {"title": "<short kebab-case slug naming the issue, e.g. missing-auth-on-admin-endpoint; keep it canonical so the same issue yields the same slug across runs>", "severity": "<Critical|High|Medium>", "detail": "<specific finding with evidence citation>", "file": "<relevant file path, or empty string if not applicable>", "line": <line number as an integer, or null>}
   ],
   "recommendations": [
     {"detail": "<specific actionable fix with location or owner>"}
@@ -144,6 +146,28 @@ class PillarAgent(ABC):
     @abstractmethod
     def system_prompt(self) -> str: ...
 
+    def _structure_finding(self, f: dict[str, Any]) -> dict[str, Any]:
+        """Attach pillar + fingerprint and normalize optional file/line onto a finding.
+
+        `or ""` guards against JSON null values (str(None) would yield "None").
+        The bool check excludes True/False, which are int subclasses in Python.
+        """
+        title = str(f.get("title") or "").strip()
+        file = str(f.get("file") or "").strip()
+        line = f.get("line")
+        if not isinstance(line, int) or isinstance(line, bool):
+            line = None
+        detail = str(f.get("detail") or "")
+        return {
+            "title": title,
+            "severity": str(f.get("severity") or ""),
+            "detail": detail,
+            "pillar": self.name,
+            "fingerprint": _fingerprint(self.name, title or detail, file),
+            "file": file,
+            "line": line,
+        }
+
     def evaluate(
         self,
         provider: LLMProvider,
@@ -174,6 +198,7 @@ class PillarAgent(ABC):
         result.output_tokens = response.output_tokens
         result.cache_creation_input_tokens = response.cache_creation_input_tokens
         result.cache_read_input_tokens = response.cache_read_input_tokens
+        result.latency_ms = response.latency_ms
         return result
 
     def _parse_response(self, raw: str) -> PillarResult:
@@ -206,7 +231,9 @@ class PillarAgent(ABC):
                 score=0.0,
                 confidence="self_reported",
                 findings=[
-                    {"severity": "High", "detail": f"LLM response could not be parsed: {exc}"}
+                    self._structure_finding(
+                        {"severity": "High", "detail": f"LLM response could not be parsed: {exc}"}
+                    )
                 ],
                 evidence_gaps=["LLM response was not valid JSON; re-run to retry"],
             )
@@ -216,7 +243,7 @@ class PillarAgent(ABC):
             name=self.name,
             score=float(data.get("score", 0)),
             confidence=str(data.get("confidence", "self_reported")),
-            findings=list(data.get("findings", [])),
+            findings=[self._structure_finding(f) for f in data.get("findings", [])],
             recommendations=list(data.get("recommendations", [])),
             evidence_gaps=list(data.get("evidence_gaps", [])),
             improve_suggestions=list(data.get("improve_suggestions", [])),

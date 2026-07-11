@@ -70,3 +70,48 @@ def test_pillar_prompt_version_is_current() -> None:
     prompt = FoundationAgent().system_prompt
     assert "AWAF v1.4" in prompt
     assert "v1.3" not in prompt
+
+
+def test_finding_is_structured_at_parse() -> None:
+    resp = {
+        "score": 75,
+        "confidence": "partial",
+        "findings": [
+            {
+                "title": "missing-auth",
+                "severity": "High",
+                "detail": "no auth",
+                "file": "app.py",
+                "line": 12,
+            }
+        ],
+    }
+    result = _AGENT._parse_response(json.dumps(resp))
+    f = result.findings[0]
+    assert f["pillar"] == "Foundation"
+    assert f["title"] == "missing-auth"
+    assert f["file"] == "app.py"
+    assert f["line"] == 12
+    assert len(f["fingerprint"]) == 12
+    assert result.score == 75  # score read independently of findings
+
+
+def test_legacy_finding_without_title_is_structured() -> None:
+    resp = {
+        "score": 50,
+        "confidence": "partial",
+        "findings": [{"severity": "Medium", "detail": "stale context"}],
+    }
+    result = _AGENT._parse_response(json.dumps(resp))
+    f = result.findings[0]
+    assert f["pillar"] == "Foundation"
+    assert f["title"] == ""
+    assert f["file"] == ""
+    assert f["line"] is None
+    assert len(f["fingerprint"]) == 12
+
+
+def test_pillar_result_has_latency_field() -> None:
+    from awaf.pillars.base import PillarResult
+
+    assert PillarResult(name="X", score=0.0, confidence="partial").latency_ms == 0
