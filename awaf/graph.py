@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -160,3 +161,127 @@ def finalize_graph(
             graph.files.append(FileEntry(path=path, role="other", summary=""))
     graph.content_hash = content_hash(scanned_files)
     return graph
+
+
+NODE_TYPES_BY_PILLAR: dict[str, set[str]] = {
+    "Foundation": {"agent", "tool", "data_store", "external"},
+    "Op. Excellence": {"guardrail"},
+    "Security": {"tool", "external", "data_store", "guardrail"},
+    "Reliability": {"agent", "tool", "external"},
+    "Performance": {"agent", "tool"},
+    "Cost Optim.": {"tool", "external"},
+    "Sustainability": {"agent", "tool"},
+    "Reasoning Integ.": {"agent", "tool"},
+    "Controllability": {"guardrail", "agent", "tool"},
+    "Context Integrity": {"context_source", "data_store", "agent"},
+}
+
+FILE_ROLES_BY_PILLAR: dict[str, set[str]] = {
+    "Foundation": {"agent", "tool", "orchestration"},
+    "Op. Excellence": {"ops", "observability", "docs", "config"},
+    "Security": {"security", "config", "agent", "tool"},
+    "Reliability": {"agent", "tool", "orchestration", "config"},
+    "Performance": {"agent", "tool", "config", "observability"},
+    "Cost Optim.": {"cost", "config"},
+    "Sustainability": {"cost", "config", "agent"},
+    "Reasoning Integ.": {"agent", "tool"},
+    "Controllability": {"agent", "tool", "orchestration"},
+    "Context Integrity": {"agent", "data", "config"},
+}
+
+
+@dataclass
+class SliceResult:
+    text: str
+    paths: set[str] = field(default_factory=set)
+
+
+def _fmt_attrs(attrs: dict[str, Any]) -> str:
+    if not attrs:
+        return ""
+    return " | " + "; ".join(f"{k}={attrs[k]}" for k in sorted(attrs))
+
+
+def render_graph_block(g: ArchitectureGraph) -> str:
+    """Deterministic text serialization used as the shared artifact_content block."""
+    lines: list[str] = ["# AGENT ARCHITECTURE GRAPH", "", "## Nodes"]
+    for n in sorted(g.nodes, key=lambda x: x.id):
+        loc = f" file={n.file}:{n.line}" if n.file else ""
+        ev = f" :: {n.evidence}" if n.evidence else ""
+        lines.append(f"[{n.type}] {n.name} (id={n.id}){loc}{ev}{_fmt_attrs(n.attrs)}")
+    lines += ["", "## Edges"]
+    for e in sorted(g.edges, key=lambda x: (x.src, x.dst, x.type)):
+        loc = f" file={e.file}:{e.line}" if e.file else ""
+        lines.append(f"{e.src} -[{e.type}]-> {e.dst}{loc}{_fmt_attrs(e.attrs)}")
+    lines += ["", "## File Manifest"]
+    for f in sorted(g.files, key=lambda x: x.path):
+        summ = f" :: {f.summary}" if f.summary else ""
+        lines.append(f"{f.path} [{f.role}]{summ}")
+    return "\n".join(lines)
+
+
+def _merge_windows(lines_sorted: list[int], ctx: int, maxlen: int) -> list[tuple[int, int]]:
+    windows: list[tuple[int, int]] = []
+    for ln in lines_sorted:
+        a, b = max(1, ln - ctx), min(maxlen, ln + ctx)
+        if windows and a <= windows[-1][1] + 1:
+            windows[-1] = (windows[-1][0], max(windows[-1][1], b))
+        else:
+            windows.append((a, b))
+    return windows
+
+
+def _render_window(path: str, lines: list[str], a: int, b: int) -> str:
+    body = "\n".join(lines[a - 1 : b])
+    return f"# File: {path} (lines {a}-{b})\n{body}"
+
+
+def select_slices(
+    graph: ArchitectureGraph,
+    pillar_name: str,
+    read_lines: Callable[[str], list[str]],
+    count_tokens: Callable[[str], int],
+    slice_budget: int = 12_000,
+    context_lines: int = 20,
+) -> SliceResult:
+    """Per-pillar cited-slices block. Node-anchored windows first, then role whole-files, budgeted."""
+    node_types = NODE_TYPES_BY_PILLAR.get(pillar_name, set())
+    roles = FILE_ROLES_BY_PILLAR.get(pillar_name, set())
+
+    anchors: dict[str, set[int]] = {}
+    for n in graph.nodes:
+        if n.type in node_types and n.file and n.line:
+            anchors.setdefault(n.file, set()).add(n.line)
+
+    chunks: list[str] = []
+    used = 0
+    included: set[str] = set()
+
+    for path in sorted(anchors):
+        lines = read_lines(path)
+        if not lines:
+            continue
+        for a, b in _merge_windows(sorted(anchors[path]), context_lines, len(lines)):
+            text = _render_window(path, lines, a, b)
+            t = count_tokens(text)
+            if used + t > slice_budget:
+                return SliceResult("\n".join(chunks), included)
+            chunks.append(text)
+            used += t
+            included.add(path)
+
+    for f in sorted(graph.files, key=lambda x: x.path):
+        if f.role not in roles or f.path in included:
+            continue
+        lines = read_lines(f.path)
+        if not lines:
+            continue
+        text = _render_window(f.path, lines, 1, len(lines))
+        t = count_tokens(text)
+        if used + t > slice_budget:
+            continue
+        chunks.append(text)
+        used += t
+        included.add(f.path)
+
+    return SliceResult("\n".join(chunks), included)

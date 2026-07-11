@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from awaf.graph import (
+    FILE_ROLES_BY_PILLAR,
+    NODE_TYPES_BY_PILLAR,
     ArchitectureGraph,
     FileEntry,
     GraphEdge,
     GraphNode,
+    SliceResult,
     content_hash,
     finalize_graph,
     graph_from_dict,
     graph_from_json,
     graph_to_json,
+    render_graph_block,
+    select_slices,
     validate_anchor,
 )
 
@@ -112,3 +117,55 @@ def test_finalize_completes_manifest_and_nulls_bad_anchors() -> None:
     assert {f.path for f in g.files} == {"a.py", "b.py"}
     assert next(f for f in g.files if f.path == "b.py").role == "other"
     assert g.content_hash == content_hash(scanned)
+
+
+_PILLARS = [
+    "Foundation",
+    "Op. Excellence",
+    "Security",
+    "Reliability",
+    "Performance",
+    "Cost Optim.",
+    "Sustainability",
+    "Reasoning Integ.",
+    "Controllability",
+    "Context Integrity",
+]
+
+
+def test_every_pillar_has_maps() -> None:
+    for p in _PILLARS:
+        assert p in NODE_TYPES_BY_PILLAR
+        assert p in FILE_ROLES_BY_PILLAR
+
+
+def test_render_block_is_deterministic() -> None:
+    g = _sample()
+    assert render_graph_block(g) == render_graph_block(_sample())
+    assert "Planner" in render_graph_block(g)
+
+
+def test_select_slices_prioritizes_node_anchors_and_respects_budget() -> None:
+    g = ArchitectureGraph(
+        nodes=[GraphNode(id="a", type="agent", name="A", file="agent.py", line=3)],
+        files=[
+            FileEntry(path="agent.py", role="agent", summary=""),
+            FileEntry(path="ci.yml", role="ops", summary=""),
+        ],
+    )
+    files = {"agent.py": ["l1", "l2", "l3", "l4", "l5"], "ci.yml": ["a", "b"]}
+    tok = lambda s: len(s.split())  # noqa: E731
+
+    # Foundation uses node type "agent" + roles {agent, tool, orchestration}: gets agent.py slice.
+    r = select_slices(g, "Foundation", lambda p: files[p], tok, slice_budget=10_000)
+    assert isinstance(r, SliceResult)
+    assert "agent.py" in r.paths
+    assert "l3" in r.text  # window around line 3
+
+    # Op. Excellence uses roles {ops, observability, docs, config}: gets ci.yml, not agent.py.
+    r2 = select_slices(g, "Op. Excellence", lambda p: files[p], tok, slice_budget=10_000)
+    assert "ci.yml" in r2.paths and "agent.py" not in r2.paths
+
+    # Tiny budget yields empty text but never raises.
+    r3 = select_slices(g, "Foundation", lambda p: files[p], tok, slice_budget=0)
+    assert r3.text == ""
