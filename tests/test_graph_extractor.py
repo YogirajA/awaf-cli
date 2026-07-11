@@ -42,6 +42,26 @@ def test_extract_provider_error_returns_none() -> None:
     assert extract_graph(p, SCANNED) is None
 
 
+def test_extract_wrong_shape_json_returns_none() -> None:
+    # Syntactically valid JSON, but nodes are strings, not objects. graph_from_dict would
+    # raise AttributeError ('str'.items()); the fallback boundary must turn it into None.
+    bad = '{"nodes": ["x", "y"], "edges": [], "files": []}'
+    assert extract_graph(_provider(bad), SCANNED) is None
+
+
+def test_extract_list_json_returns_none() -> None:
+    # repair/parse yields a list, not a dict. _loads_lenient must reject it -> None.
+    assert extract_graph(_provider("[1, 2, 3]"), SCANNED) is None
+
+
+def test_extract_non_provider_error_returns_none() -> None:
+    # A non-ProviderError SDK exception (e.g. a raw network error the adapter did not wrap)
+    # must not escape extract_graph. The broad fallback boundary turns it into None.
+    p = _provider(_VALID)
+    p.complete.side_effect = RuntimeError("connection reset")
+    assert extract_graph(p, SCANNED) is None
+
+
 def test_get_graph_uses_cache_on_second_call(tmp_path) -> None:
     d = str(tmp_path / "gc")
     p = _provider(_VALID)

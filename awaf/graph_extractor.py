@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
+from typing import Any
 
 from json_repair import repair_json
 
@@ -13,7 +15,7 @@ from awaf.graph import (
     load_cached_graph,
     store_graph,
 )
-from awaf.providers.base import LLMProvider, ProviderError
+from awaf.providers.base import LLMProvider
 from awaf.retry import with_retry
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ Rules:
 _USER_PROMPT = "Extract the agent-architecture graph from the provided artifacts as JSON."
 
 
-def _loads_lenient(raw: str) -> dict | None:  # type: ignore[type-arg]
+def _loads_lenient(raw: str) -> dict[str, Any] | None:
     text = raw.strip()
     if text.startswith("```"):
         rows = text.splitlines()
@@ -56,7 +58,9 @@ def _loads_lenient(raw: str) -> dict | None:  # type: ignore[type-arg]
     return data if isinstance(data, dict) else None
 
 
-def _pack(scanned_files: list[tuple[str, str]], count_tokens, budget: int) -> str:  # type: ignore[no-untyped-def]
+def _pack(
+    scanned_files: list[tuple[str, str]], count_tokens: Callable[[str], int], budget: int
+) -> str:
     chunks: list[str] = []
     used = 0
     for path, text in scanned_files:
@@ -75,9 +79,15 @@ def extract_graph(
     scanned_files: list[tuple[str, str]],
     extract_tokens: int = 150_000,
 ) -> ArchitectureGraph | None:
-    """One LLM extraction pass. Returns a finalized graph, or None to signal fallback."""
-    payload = _pack(scanned_files, provider.count_tokens, extract_tokens)
+    """One LLM extraction pass. Returns a finalized graph, or None to signal fallback.
+
+    This is a deliberate fallback boundary and must NEVER raise. Any failure returns None
+    so the caller degrades to the raw-dump path: a provider error, a non-ProviderError SDK
+    exception (e.g. a network connection error the adapter did not wrap), unparseable JSON,
+    or valid-but-wrong-shaped JSON that graph_from_dict cannot destructure.
+    """
     try:
+        payload = _pack(scanned_files, provider.count_tokens, extract_tokens)
         resp = with_retry(
             provider,
             EXTRACTION_SYSTEM_PROMPT,
@@ -85,14 +95,16 @@ def extract_graph(
             payload,
             max_retries=provider.config.max_retries,
         )
-    except ProviderError as exc:
-        logger.warning("Graph extraction call failed: %s", exc)
+        data = _loads_lenient(resp.content)
+        if data is None:
+            logger.warning("Graph extraction returned unparseable JSON; falling back to raw dump.")
+            return None
+        return finalize_graph(graph_from_dict(data), scanned_files)
+    except Exception as exc:
+        # Broad by design: extraction is optional. Any error degrades to the raw-dump path
+        # rather than crashing awaf run. Same convention as store_graph in awaf/graph.py.
+        logger.warning("Graph extraction failed (%s); falling back to raw dump.", exc)
         return None
-    data = _loads_lenient(resp.content)
-    if data is None:
-        logger.warning("Graph extraction returned unparseable JSON; falling back to raw dump.")
-        return None
-    return finalize_graph(graph_from_dict(data), scanned_files)
 
 
 def get_graph(
