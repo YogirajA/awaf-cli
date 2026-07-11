@@ -52,7 +52,6 @@ def _starvation_retry(
     agent: PillarAgent,
     res: PillarResult,
     included_paths: set[str],
-    graph: ArchitectureGraph,
     provider: LLMProvider,
     model: str,
     read_lines: Callable[[str], list[str]],
@@ -70,14 +69,15 @@ def _starvation_retry(
     append that file's whole content to the user context and re-run evaluate() once.
     Otherwise return *res* unchanged. Bounded to a single retry.
     """
-    # `graph` is accepted for interface symmetry with the call site; missing files are
-    # matched against scanned files (files_by_len), not graph nodes.
     if res.confidence not in {"self_reported", "partial"} or not res.evidence_gaps:
         return res
 
+    # Missing files are matched against scanned files (files_by_len) by basename substring.
     gaps_text = " ".join(res.evidence_gaps)
     missing = sorted(
-        p for p in files_by_len if p not in included_paths and os.path.basename(p) in gaps_text
+        p
+        for p in files_by_len
+        if p not in included_paths and (base := os.path.basename(p)) and base in gaps_text
     )
     if not missing:
         return res
@@ -228,7 +228,6 @@ def run_assessment(
                     agent,
                     res,
                     sr.paths,
-                    g,
                     provider,
                     model,
                     read_lines,

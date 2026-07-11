@@ -68,3 +68,4 @@ def test_score_parity_between_graph_and_raw() -> None:
         graph_config=GraphConfig(),
     )
     assert raw.overall_score == gr.overall_score  # evidence differs, score does not
+    assert raw.foundation_passed == gr.foundation_passed  # score-neutral gate too
