@@ -133,3 +133,30 @@ def graph_to_json(g: ArchitectureGraph) -> str:
 
 def graph_from_json(s: str) -> ArchitectureGraph:
     return graph_from_dict(json.loads(s))
+
+
+def validate_anchor(file: str, line: int | None, files_by_len: dict[str, int]) -> int | None:
+    """Return line if it is a real 1-based line within *file*, else None."""
+    if not isinstance(line, int) or isinstance(line, bool):
+        return None
+    n = files_by_len.get(file)
+    if n is None:
+        return None
+    return line if 1 <= line <= n else None
+
+
+def finalize_graph(
+    graph: ArchitectureGraph, scanned_files: list[tuple[str, str]]
+) -> ArchitectureGraph:
+    """Validate anchors, complete the file manifest (coverage rule), set the content hash."""
+    files_by_len = {p: len(c.splitlines()) for p, c in scanned_files}
+    for node in graph.nodes:
+        node.line = validate_anchor(node.file, node.line, files_by_len)
+    for edge in graph.edges:
+        edge.line = validate_anchor(edge.file, edge.line, files_by_len)
+    present = {f.path for f in graph.files}
+    for path, _ in scanned_files:
+        if path not in present:
+            graph.files.append(FileEntry(path=path, role="other", summary=""))
+    graph.content_hash = content_hash(scanned_files)
+    return graph
