@@ -169,3 +169,62 @@ def test_select_slices_prioritizes_node_anchors_and_respects_budget() -> None:
     # Tiny budget yields empty text but never raises.
     r3 = select_slices(g, "Foundation", lambda p: files[p], tok, slice_budget=0)
     assert r3.text == ""
+
+
+def test_select_slices_stop_semantics_abandons_later_anchors() -> None:
+    # Three anchor files; the middle one overflows the budget. STOP (return) must abandon
+    # the third even though it alone would fit. SKIP (continue) would wrongly include it.
+    g = ArchitectureGraph(
+        nodes=[
+            GraphNode(id="a", type="agent", name="A", file="a.py", line=1),
+            GraphNode(id="b", type="agent", name="B", file="b.py", line=1),
+            GraphNode(id="c", type="agent", name="C", file="c.py", line=1),
+        ],
+        files=[
+            FileEntry(path="a.py", role="other"),  # role "other" keeps phase 2 out of it
+            FileEntry(path="b.py", role="other"),
+            FileEntry(path="c.py", role="other"),
+        ],
+    )
+    files = {"a.py": ["a1"], "b.py": ["b1", "b2", "b3", "b4", "b5"], "c.py": ["c1"]}
+    tok = lambda s: len(s.split())  # noqa: E731
+    # a window = 6 tok, b window = 10 tok, c window = 6 tok. Budget 13 fits a, not a+b.
+    r = select_slices(g, "Foundation", lambda p: files[p], tok, slice_budget=13)
+    assert "a.py" in r.paths
+    assert "b.py" not in r.paths  # overflows the budget
+    assert "c.py" not in r.paths  # abandoned by STOP; SKIP would have added it (6 <= 13-6)
+
+
+def test_select_slices_does_not_double_include_anchor_file_as_role() -> None:
+    # agent.py is both a node anchor AND role-selected by Foundation; must appear once.
+    g = ArchitectureGraph(
+        nodes=[GraphNode(id="a", type="agent", name="A", file="agent.py", line=2)],
+        files=[FileEntry(path="agent.py", role="agent")],
+    )
+    files = {"agent.py": ["l1", "l2", "l3", "l4"]}
+    tok = lambda s: len(s.split())  # noqa: E731
+    r = select_slices(g, "Foundation", lambda p: files[p], tok, slice_budget=10_000)
+    assert r.text.count("# File: agent.py") == 1  # not re-added in the role phase
+    assert r.paths == {"agent.py"}
+
+
+def test_select_slices_merges_nearby_anchor_windows() -> None:
+    g = ArchitectureGraph(
+        nodes=[
+            GraphNode(id="a", type="agent", name="A", file="m.py", line=3),
+            GraphNode(id="b", type="agent", name="B", file="m.py", line=8),
+        ],
+        files=[FileEntry(path="m.py", role="other")],
+    )
+    files = {"m.py": [f"l{i}" for i in range(1, 11)]}  # 10 lines
+    tok = lambda s: len(s.split())  # noqa: E731
+    # context 2: windows [1,5] and [6,10] are adjacent (6 <= 5+1) -> one merged block.
+    merged = select_slices(
+        g, "Foundation", lambda p: files[p], tok, slice_budget=10_000, context_lines=2
+    )
+    assert merged.text.count("# File: m.py") == 1
+    # context 1: windows [2,4] and [7,9] are disjoint -> two blocks.
+    separate = select_slices(
+        g, "Foundation", lambda p: files[p], tok, slice_budget=10_000, context_lines=1
+    )
+    assert separate.text.count("# File: m.py") == 2
