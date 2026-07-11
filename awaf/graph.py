@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -285,3 +287,30 @@ def select_slices(
         included.add(f.path)
 
     return SliceResult("\n".join(chunks), included)
+
+
+def _cache_file(content_hash: str, cache_dir: str) -> str:
+    return os.path.join(cache_dir, f"{content_hash}.json")
+
+
+def load_cached_graph(content_hash: str, cache_dir: str) -> ArchitectureGraph | None:
+    try:
+        with open(_cache_file(content_hash, cache_dir), encoding="utf-8") as fh:
+            return graph_from_json(fh.read())
+    except (OSError, ValueError):
+        return None
+
+
+def store_graph(graph: ArchitectureGraph, cache_dir: str, max_keep: int = 8) -> None:
+    """Best-effort cache write plus LRU prune. Never raises."""
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(_cache_file(graph.content_hash, cache_dir), "w", encoding="utf-8") as fh:
+            fh.write(graph_to_json(graph))
+        entries = [os.path.join(cache_dir, f) for f in os.listdir(cache_dir) if f.endswith(".json")]
+        entries.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for stale in entries[max_keep:]:
+            with contextlib.suppress(OSError):
+                os.remove(stale)
+    except OSError:
+        pass
