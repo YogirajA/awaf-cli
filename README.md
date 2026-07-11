@@ -286,28 +286,14 @@ AWAF_GRAPH_CACHE_MAX=8
 
 The graph cache lives next to `awaf.db` in a `graph_cache/` directory.
 
-### Before and After (Token Usage)
+### What changes per run
 
-**Before (raw dump):**
-```
-Artifacts          18,750 tokens  (42 files)
-Context window    128,000 tokens  (gpt-4o)
-Per-pillar est     18,900 tokens  (15% of window)
-Total est         189,000 tokens  (10 pillars × ~18,900)
-Cost est               ~$0.0147
-```
+The shape of the change (actual numbers depend on your repo size, model, and provider):
 
-**After (with graph):**
-```
-Graph extraction    52,000 tokens  (one-time, cached)
-Graph artifact       8,200 tokens  (sent to all 10 pillars)
-Per-pillar slices    3,900 tokens  (focused evidence per pillar)
-Per-pillar total     12,100 tokens  (8% of window)
-Total est          121,000 tokens  (10 pillars × ~12,100)
-Cost est               ~$0.0079  (cached re-run: ~$0.0001)
-```
+- **Raw path:** the full minified dump (up to the `AWAF_MAX_ARTIFACTS_TOKENS` budget) is the evidence for every pillar. Prompt caching on Anthropic makes the within-run re-reads cheap, but every fresh run re-sends the whole dump.
+- **Graph path:** one extraction pass builds the graph, then each pillar sees a small shared graph block plus only its cited code slices. On an unchanged re-run the cached graph is reused and extraction is skipped, so the per-run input shrinks to the graph block plus slices.
 
-On unchanged re-runs, the cached graph saves the extraction cost entirely, leaving only the small per-pillar slices to ingest.
+Run `awaf graph` to see the actual node, edge, and file-role counts, the token cost of extraction, and the cache status for your own repository.
 
 ---
 
