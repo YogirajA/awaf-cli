@@ -1337,6 +1337,30 @@ def compare(id1: int, id2: int) -> None:
     click.echo(f"  #{id1}: {rec1.provider}/{rec1.model}  {rec1.created_at.strftime('%Y-%m-%d')}")
     click.echo(f"  #{id2}: {rec2.provider}/{rec2.model}  {rec2.created_at.strftime('%Y-%m-%d')}")
 
+    import json as _json
+
+    from awaf.findings import classify_findings
+
+    def _load_findings(rec: object) -> list[dict[str, Any]]:
+        try:
+            loaded: list[dict[str, Any]] = _json.loads(getattr(rec, "findings", "[]"))
+            return loaded
+        except (ValueError, TypeError):
+            return []
+
+    _life = classify_findings(_load_findings(rec2), _load_findings(rec1))
+    _n, _rec, _res = _life.counts
+    click.echo()
+    click.echo(f"  Findings: {_n} new, {_rec} recurring, {_res} resolved (id{id1} -> id{id2})")
+    for _f in _life.new:
+        click.echo(
+            f"    + [{_f.get('severity', ''):<8}] {_f.get('pillar', ''):<18} {_f.get('detail', '')}"
+        )
+    for _f in _life.resolved:
+        click.echo(
+            f"    - [{_f.get('severity', ''):<8}] {_f.get('pillar', ''):<18} {_f.get('detail', '')}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # awaf report
@@ -1424,6 +1448,18 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
     recs = _json.loads(rec.recommendations)
     improvements = _json.loads(rec.improve_suggestions)
 
+    from awaf.db import get_recent_assessments as _get_recent
+    from awaf.findings import LifecycleResult, classify_findings, finding_signature
+
+    _prev = _get_recent(rec.project_name or project_name, limit=2)
+    _life: LifecycleResult | None = None
+    if len(_prev) >= 2:
+        try:
+            _prev_findings: list[dict[str, Any]] = _json.loads(_prev[1].findings)
+        except (ValueError, TypeError):
+            _prev_findings = []
+        _life = classify_findings(findings, _prev_findings)
+
     if evidence or fmt == "full":
         click.echo()
         click.echo("  EVIDENCE REVIEWED")
@@ -1453,7 +1489,11 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
                 pillar = f.get("pillar", "")
                 severity = f.get("severity", "")
                 detail = f.get("detail", "")
-                _print_wrapped(f"  [{severity:<8}]  {pillar:<18}  ", detail)
+                tag = ""
+                if _life is not None:
+                    status = _life.statuses.get(finding_signature(f), "")
+                    tag = f"[{status.upper()}] " if status else ""
+                _print_wrapped(f"  [{severity:<8}]  {pillar:<18}  {tag}", detail)
         else:
             click.echo("  — (no findings recorded)")
 
