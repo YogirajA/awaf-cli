@@ -12,7 +12,9 @@ from typing import Any
 
 import click
 
-from awaf.config import resolve_ci_config, resolve_provider_config
+from awaf.config import resolve_ci_config, resolve_graph_config, resolve_provider_config
+from awaf.graph import graph_to_json
+from awaf.graph_extractor import get_graph
 from awaf.providers import get_provider
 from awaf.providers.base import ProviderConfigError
 
@@ -427,6 +429,21 @@ def cli() -> None:
     metavar="PATH",
     help="Write a JSONL run-telemetry trace to PATH (opt-in; also via [telemetry] or AWAF_TELEMETRY_*).",
 )
+@click.option(
+    "--graph/--no-graph",
+    "use_graph",
+    default=None,
+    help=(
+        "Enable/disable code-graph evidence mode (default: awaf.toml [graph] "
+        "or AWAF_GRAPH; on unless disabled)."
+    ),
+)
+@click.option(
+    "--refresh-graph",
+    is_flag=True,
+    default=False,
+    help="Force re-extraction of the code graph, bypassing the on-disk cache.",
+)
 def run(
     paths: tuple[str, ...],
     ci: bool,
@@ -443,13 +460,15 @@ def run(
     force: bool,
     runs: int,
     trace: str | None,
+    use_graph: bool | None,
+    refresh_graph: bool,
 ) -> None:
     """Assess agent architecture against AWAF v1.4 across 10 pillars."""
     import json as _json
     import subprocess
 
-    from awaf.db import save_assessment
-    from awaf.ingestor import ingest
+    from awaf.db import db_path, save_assessment
+    from awaf.ingestor import ingest, ingest_files
     from awaf.pillars import run_assessment
     from awaf.pricing import estimate_cost
 
@@ -718,6 +737,28 @@ def run(
         ]
         artifact_content = "\n".join(note_lines) + "\n" + artifact_content
 
+    # Code-graph evidence (optional; a None graph makes run_assessment fall back to the
+    # raw artifact_content dump above -- behavior is unchanged from today when disabled
+    # or when extraction fails).
+    graph_cfg = resolve_graph_config(cli_graph=use_graph, cli_refresh=refresh_graph)
+    architecture_graph = None
+    scanned_files_map: dict[str, str] = {}
+    if graph_cfg.enabled:
+        scanned_pairs = ingest_files(
+            paths=scan_paths,
+            exclude_patterns=toml_data.get("files", {}).get("exclude", []),
+        )
+        cache_dir = os.path.join(os.path.dirname(db_path()), "graph_cache")
+        architecture_graph = get_graph(
+            llm_provider,
+            scanned_pairs,
+            cache_dir,
+            refresh=graph_cfg.refresh,
+            extract_tokens=graph_cfg.extract_tokens,
+            cache_max=graph_cfg.cache_max,
+        )
+        scanned_files_map = dict(scanned_pairs)
+
     # Run pillar agents (single run or multi-run loop)
     def _on_pillar_start(name: str) -> None:
         click.echo(f"  \u25b8 Evaluating {name}...")
@@ -736,6 +777,9 @@ def run(
                 model=effective_model,
                 pillar_delay_seconds=float(delay),
                 on_pillar_start=_on_pillar_start if runs == 1 else None,
+                graph=architecture_graph,
+                scanned_files=scanned_files_map,
+                graph_config=graph_cfg,
             )
         except ValueError as exc:
             click.echo(f"Assessment error: {exc}", err=True)
@@ -1017,6 +1061,109 @@ def run(
 
     if failed and not warn_only:
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# awaf graph
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="graph")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the graph as JSON.")
+@click.option(
+    "--refresh",
+    is_flag=True,
+    default=False,
+    help="Force re-extraction of the code graph, bypassing the on-disk cache.",
+)
+def graph(path: str, as_json: bool, refresh: bool) -> None:
+    """Extract and inspect the code-architecture graph for PATH (default: current directory)."""
+    from awaf.db import db_path
+    from awaf.graph import content_hash, load_cached_graph
+    from awaf.ingestor import ingest_files
+
+    toml_data = _read_toml()
+    graph_cfg = resolve_graph_config(cli_refresh=refresh)
+
+    try:
+        config = resolve_provider_config()
+        llm_provider = get_provider(config)
+    except ProviderConfigError as exc:
+        click.echo(f"Configuration error: {exc}", err=True)
+        sys.exit(2)
+
+    scanned_pairs = ingest_files(
+        paths=[path],
+        exclude_patterns=toml_data.get("files", {}).get("exclude", []),
+    )
+    if not scanned_pairs:
+        click.echo(f"No files found to analyze under {path}.", err=True)
+        sys.exit(2)
+
+    cache_dir = os.path.join(os.path.dirname(db_path()), "graph_cache")
+
+    was_cached = False
+    if not refresh:
+        was_cached = load_cached_graph(content_hash(scanned_pairs), cache_dir) is not None
+
+    result = get_graph(
+        llm_provider,
+        scanned_pairs,
+        cache_dir,
+        refresh=refresh,
+        extract_tokens=graph_cfg.extract_tokens,
+        cache_max=graph_cfg.cache_max,
+    )
+
+    if result is None:
+        click.echo(
+            "Graph extraction unavailable; falling back to raw evidence "
+            "(the graph could not be extracted from this repo)."
+        )
+        return
+
+    if as_json:
+        click.echo(graph_to_json(result))
+        return
+
+    node_counts: dict[str, int] = {}
+    for n in result.nodes:
+        node_counts[n.type] = node_counts.get(n.type, 0) + 1
+
+    guardrail_count = node_counts.get("guardrail", 0)
+    entry_points = [
+        n.name for n in result.nodes if n.type == "agent" and n.attrs.get("entry_point")
+    ]
+
+    role_counts: dict[str, int] = {}
+    for f in result.files:
+        role_counts[f.role] = role_counts.get(f.role, 0) + 1
+
+    click.echo(f"\nCode-Architecture Graph: {path}")
+    click.echo(_SEP)
+    click.echo("  NODE TYPES")
+    for t in sorted(node_counts):
+        click.echo(f"    {t:<16} {node_counts[t]:>4}")
+
+    click.echo()
+    click.echo(f"  Guardrails          {guardrail_count}")
+    click.echo(f"  Entry-point agents  {len(entry_points)}")
+    for name in entry_points:
+        click.echo(f"    - {name}")
+
+    click.echo()
+    click.echo("  FILE ROLES")
+    for r in sorted(role_counts):
+        click.echo(f"    {r:<16} {role_counts[r]:>4}")
+
+    click.echo()
+    click.echo(
+        f"  Totals   nodes={len(result.nodes)}  edges={len(result.edges)}"
+        f"  files={len(result.files)}"
+    )
+    click.echo(f"  Cache    {'hit' if was_cached else 'extracted (new)'}  ({cache_dir})")
+    click.echo(_SEP)
 
 
 def _pillar_table_lines(assessment: object) -> list[str]:

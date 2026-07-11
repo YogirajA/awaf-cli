@@ -162,6 +162,51 @@ def ingest(
     )
 
 
+def ingest_files(
+    paths: list[str], exclude_patterns: list[str] | None = None
+) -> list[tuple[str, str]]:
+    """
+    Discover and read ALL artifact files from *paths* as (rel_path, minified_content) pairs.
+
+    Reuses the same discovery (_walk) and per-file read/minify (_read_file, which already
+    applies the size and line-count gates) as ingest(), so "scanned files" means the same
+    thing across both. Unlike ingest(), this does NOT apply the AWAF_MAX_ARTIFACTS_TOKENS
+    budget -- the code-graph extractor needs to see the full repo and enforces its own
+    (much larger) token cap when packing the extraction payload. This is what delivers the
+    no-truncation benefit of graph mode over the raw-dump path.
+    """
+    excludes = set(_DEFAULT_EXCLUDE + (exclude_patterns or []))
+    pairs: list[tuple[str, str]] = []
+
+    for base_path in paths:
+        base_path = os.path.abspath(base_path)
+        if os.path.isfile(base_path):
+            if os.path.basename(base_path).lower() in _DEFAULT_EXCLUDE_FILES:
+                continue
+            candidates = [base_path]
+        else:
+            candidates = _walk(base_path, excludes)
+
+        for abs_path in candidates:
+            rel_path = os.path.relpath(abs_path)
+
+            try:
+                size = os.path.getsize(abs_path)
+            except OSError:
+                continue
+            if size > _MAX_FILE_BYTES:
+                continue
+
+            try:
+                text = _read_file(abs_path)
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            pairs.append((rel_path, text))
+
+    return pairs
+
+
 def _walk(base: str, excludes: set[str]) -> list[str]:
     """Walk *base* and return all files with supported extensions, skipping excluded dirs."""
     results: list[str] = []

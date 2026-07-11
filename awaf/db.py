@@ -21,6 +21,14 @@ def _db_url() -> str:
     return os.environ.get("AWAF_DB_URL", _DEFAULT_DB_URL)
 
 
+def db_path() -> str:
+    """Return the filesystem path to the SQLite database file.
+
+    Used by the CLI to co-locate the graph cache directory next to awaf.db.
+    """
+    return _db_url().removeprefix("sqlite:///")
+
+
 class _Base(DeclarativeBase):
     pass
 
