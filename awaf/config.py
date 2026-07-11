@@ -17,6 +17,14 @@ class CiConfig:
     watch_paths: list[str] = field(default_factory=list)
 
 
+@dataclass
+class TelemetryConfig:
+    """Opt-in run telemetry (awaf.toml [telemetry] section). Disabled by default."""
+
+    enabled: bool = False
+    trace_path: str = ""
+
+
 # Environment variable names per provider
 _API_KEY_ENV: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -123,3 +131,27 @@ def resolve_ci_config(toml_path: str = "awaf.toml") -> CiConfig:
         change_detection=bool(ci.get("change_detection", False)),
         watch_paths=list(ci.get("watch_paths", [])),
     )
+
+
+def resolve_telemetry_config(
+    cli_trace: str | None = None, toml_path: str = "awaf.toml"
+) -> TelemetryConfig:
+    """Resolve telemetry settings. Precedence: CLI flag > env > awaf.toml > default (off).
+
+    A bare enable with no path falls back to 'awaf-trace.jsonl'.
+    """
+    toml_data = _read_toml(toml_path)
+    tel = toml_data.get("telemetry", {})
+
+    env_enabled = os.environ.get("AWAF_TELEMETRY_ENABLED", "")
+    env_path = os.environ.get("AWAF_TELEMETRY_PATH", "")
+
+    path = cli_trace or env_path or str(tel.get("path", "")) or ""
+    enabled = bool(
+        cli_trace
+        or (env_enabled.lower() in {"1", "true", "yes"})
+        or bool(tel.get("enabled", False))
+    )
+    if enabled and not path:
+        path = "awaf-trace.jsonl"
+    return TelemetryConfig(enabled=enabled, trace_path=path)
