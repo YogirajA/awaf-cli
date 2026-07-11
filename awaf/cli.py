@@ -828,7 +828,7 @@ def run(
     _sev = {"Critical": 0, "High": 1, "Medium": 2}
     all_findings.sort(key=lambda f: _sev.get(f.get("severity", ""), 3))
 
-    # Lifecycle vs the previous run — loaded BEFORE this run's rows are saved,
+    # Lifecycle vs the previous run, loaded BEFORE this run's rows are saved,
     # so _prev_records[0] is the genuine previous run.
     from awaf.db import get_recent_assessments
     from awaf.findings import classify_findings, finding_signature
@@ -949,7 +949,7 @@ def run(
         )
         click.echo(f"  Artifact: {out}")
 
-    # Emit JSONL run telemetry when enabled — informational only, never gates the exit code.
+    # Emit JSONL run telemetry when enabled: informational only, never gates the exit code.
     if _telemetry.enabled:
         _writer = TraceWriter(_telemetry.trace_path)
         for r in assessment.pillar_results:
