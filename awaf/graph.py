@@ -7,7 +7,6 @@ from typing import Any
 
 _NODE_KEYS = {"id", "type", "name", "file", "line", "evidence"}
 _EDGE_KEYS = {"src", "dst", "from", "to", "type", "file", "line"}
-_FILE_KEYS = {"path", "role", "summary"}
 
 
 @dataclass
@@ -67,9 +66,10 @@ def graph_from_dict(d: dict[str, Any]) -> ArchitectureGraph:
         attrs = {k: v for k, v in n.items() if k not in _NODE_KEYS}
         nodes.append(
             GraphNode(
-                id=str(n.get("id", "")),
-                type=str(n.get("type", "")),
-                name=str(n.get("name", "")),
+                # `or ""` guards against JSON null values (str(None) would yield "None").
+                id=str(n.get("id") or ""),
+                type=str(n.get("type") or ""),
+                name=str(n.get("name") or ""),
                 file=str(n.get("file") or ""),
                 line=_line_or_none(n.get("line")),
                 evidence=str(n.get("evidence") or ""),
@@ -81,9 +81,10 @@ def graph_from_dict(d: dict[str, Any]) -> ArchitectureGraph:
         attrs = {k: v for k, v in e.items() if k not in _EDGE_KEYS}
         edges.append(
             GraphEdge(
-                src=str(e.get("src", e.get("from", ""))),
-                dst=str(e.get("dst", e.get("to", ""))),
-                type=str(e.get("type", "")),
+                # `or` chains so a JSON null on src/dst falls through to from/to (not "None").
+                src=str(e.get("src") or e.get("from") or ""),
+                dst=str(e.get("dst") or e.get("to") or ""),
+                type=str(e.get("type") or ""),
                 file=str(e.get("file") or ""),
                 line=_line_or_none(e.get("line")),
                 attrs=attrs,
@@ -93,7 +94,7 @@ def graph_from_dict(d: dict[str, Any]) -> ArchitectureGraph:
     for f in d.get("files", []) or []:
         files.append(
             FileEntry(
-                path=str(f.get("path", "")),
+                path=str(f.get("path") or ""),
                 role=str(f.get("role") or "other"),
                 summary=str(f.get("summary") or ""),
             )

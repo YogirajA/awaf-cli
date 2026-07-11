@@ -63,6 +63,22 @@ def test_from_dict_accepts_llm_from_to_and_unknown_attrs() -> None:
     assert g.edges[0].attrs["has_timeout"] is True
 
 
+def test_from_dict_tolerates_json_nulls() -> None:
+    # An LLM may emit both key pairs and null the unused one, or null a field outright.
+    d = {
+        "nodes": [{"id": None, "type": "tool", "name": None}],
+        "edges": [{"src": None, "from": "a:p", "dst": None, "to": "t:sql", "type": None}],
+        "files": [{"path": None, "role": None, "summary": None}],
+    }
+    g = graph_from_dict(d)
+    assert g.nodes[0].id == ""  # null id becomes "", never the literal "None"
+    assert g.nodes[0].name == ""
+    assert g.edges[0].src == "a:p"  # null src falls through to "from"
+    assert g.edges[0].dst == "t:sql"
+    assert g.edges[0].type == ""
+    assert g.files[0].path == "" and g.files[0].role == "other"
+
+
 def test_content_hash_is_stable_and_change_sensitive() -> None:
     a = [("a.py", "x = 1"), ("b.py", "y = 2")]
     assert content_hash(a) == content_hash(list(reversed(a)))  # order-independent
