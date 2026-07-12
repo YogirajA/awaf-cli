@@ -84,5 +84,12 @@ def test_label_matches_score_prefers_slash_100_form() -> None:
     assert rc.label_matches_score(text).ok
 
 
+def test_label_matches_score_ignores_lines_without_slash_100() -> None:
+    # No N/100 form on the overall line: a stray number (a version fragment or a finding
+    # count) must NOT be misread as the score and fail an otherwise-correct report.
+    assert rc.label_matches_score("Overall readiness: Near Ready (AWAF v1.4)").ok
+    assert rc.label_matches_score("Overall Readiness: Needs Work (3 High findings)").ok
+
+
 def test_pillar_aliases_cover_ten_pillars() -> None:
     assert len(rc.PILLAR_ALIASES) == 10

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -65,19 +66,26 @@ def _starvation_retry(
     One-shot retry for a starved pillar.
 
     If *res* reports low confidence with evidence gaps that name a scanned file not
-    already covered by the pillar's cited slices (matched by basename substring),
-    append that file's whole content to the user context and re-run evaluate() once.
-    Otherwise return *res* unchanged. Bounded to a single retry.
+    already covered by the pillar's cited slices (matched by whole file/basename token,
+    not substring), append that file's whole content to the user context and re-run
+    evaluate() once. Otherwise return *res* unchanged. Bounded to a single retry.
+
+    The retry's usage is added to the original call's so both LLM calls are billed to the
+    caller's cost/budget accounting, and a retry that failed to parse never replaces the
+    valid original result (it would downgrade a real score to a parse-failure 0).
     """
     if res.confidence not in {"self_reported", "partial"} or not res.evidence_gaps:
         return res
 
-    # Missing files are matched against scanned files (files_by_len) by basename substring.
+    # Match scanned files against gap text by WHOLE path/basename token (a plain substring
+    # test wrongly fires "base.py" on a gap naming "database.py").
     gaps_text = " ".join(res.evidence_gaps)
+    gap_tokens = {t.replace("\\", "/") for t in re.split(r"[\s,;:()\[\]{}\"'`]+", gaps_text) if t}
+    gap_basenames = {os.path.basename(t) for t in gap_tokens}
     missing = sorted(
         p
         for p in files_by_len
-        if p not in included_paths and (base := os.path.basename(p)) and base in gaps_text
+        if p not in included_paths and (os.path.basename(p) in gap_basenames or p in gap_tokens)
     )
     if not missing:
         return res
@@ -99,13 +107,27 @@ def _starvation_retry(
 
     appended = "\n".join(chunks)
     new_extra = f"{extra}\n{appended}" if extra else appended
-    return agent.evaluate(
+    retry = agent.evaluate(
         provider,
         graph_block,
         model=model,
         extra_user_context=new_extra,
         files_by_len=files_by_len,
     )
+    # Both LLM calls happened; bill both regardless of which result we keep.
+    combined_in = res.input_tokens + retry.input_tokens
+    combined_out = res.output_tokens + retry.output_tokens
+    combined_cc = res.cache_creation_input_tokens + retry.cache_creation_input_tokens
+    combined_cr = res.cache_read_input_tokens + retry.cache_read_input_tokens
+    combined_lat = res.latency_ms + retry.latency_ms
+    # A parse-failed retry must not clobber a valid partial result with a 0/self_reported.
+    chosen = res if retry.parse_failed else retry
+    chosen.input_tokens = combined_in
+    chosen.output_tokens = combined_out
+    chosen.cache_creation_input_tokens = combined_cc
+    chosen.cache_read_input_tokens = combined_cr
+    chosen.latency_ms = combined_lat
+    return chosen
 
 
 # All 10 pillar agents in assessment order
@@ -199,14 +221,13 @@ def run_assessment(
     eval_fn: Callable[[PillarAgent], PillarResult]
     if graph is not None and (graph_config is None or graph_config.enabled):
         g: ArchitectureGraph = graph
+        gcfg = graph_config or GraphConfig()
         files = scanned_files or {}
         files_by_len = {p: len(c.splitlines()) for p, c in files.items()}
         graph_block = render_graph_block(g)
-        slice_budget = graph_config.slice_budget if graph_config is not None else 12_000
-        context_lines = graph_config.context_lines if graph_config is not None else 20
-        starvation_retry_enabled = (
-            graph_config.starvation_retry if graph_config is not None else True
-        )
+        slice_budget = gcfg.slice_budget
+        context_lines = gcfg.context_lines
+        starvation_retry_enabled = gcfg.starvation_retry
 
         def read_lines(path: str) -> list[str]:
             return files.get(path, "").splitlines()

@@ -9,6 +9,7 @@ from json_repair import repair_json
 
 from awaf import reportcheck
 from awaf.providers.base import LLMProvider
+from awaf.retry import with_retry
 
 _JUDGE_SYSTEM = (
     "You are a strict evaluator. You are given an AWAF assessment REPORT and a single "
@@ -49,8 +50,10 @@ class CaseResult:
     verdicts: list[Verdict] = field(default_factory=list)
     skipped: bool = False
     skip_reason: str = ""
-    input_tokens: int = 0
+    input_tokens: int = 0  # subject-model tokens
     output_tokens: int = 0
+    judge_input_tokens: int = 0  # judge-model tokens (priced separately)
+    judge_output_tokens: int = 0
 
 
 @dataclass
@@ -81,10 +84,19 @@ def load_eval_cases(skill_dir: Path) -> list[EvalCase]:
 
 
 def load_skill_prompt(skill_dir: Path) -> str:
+    """Assemble the eval subject prompt: SKILL.md plus every references/*.md file.
+
+    Globbing the references directory (rather than hardcoding output-format.md) keeps the
+    graded prompt in step with the skill as reference files are added or renamed, so the
+    grader never silently scores a prompt that diverges from what the skill actually runs.
+    """
     base = skill_dir / "skills" / "awaf"
-    skill = (base / "SKILL.md").read_text(encoding="utf-8")
-    out_fmt = (base / "references" / "output-format.md").read_text(encoding="utf-8")
-    return f"{skill}\n\n---\n\n# Output Format Reference\n\n{out_fmt}"
+    parts = [(base / "SKILL.md").read_text(encoding="utf-8")]
+    refs_dir = base / "references"
+    if refs_dir.is_dir():
+        for ref in sorted(refs_dir.glob("*.md")):
+            parts.append(f"# Reference: {ref.name}\n\n{ref.read_text(encoding='utf-8')}")
+    return "\n\n---\n\n".join(parts)
 
 
 def _deterministic_checks(report: str) -> list[DeterministicCheck]:
@@ -98,7 +110,9 @@ def _deterministic_checks(report: str) -> list[DeterministicCheck]:
 
 
 def run_case(provider: LLMProvider, system_prompt: str, case: EvalCase) -> tuple[str, int, int]:
-    resp = provider.complete(system_prompt=system_prompt, user_prompt=case.prompt)
+    # Route through with_retry so a single transient 429/timeout does not abort the whole
+    # eval run mid-flight (the same convention pillar evaluation uses).
+    resp = with_retry(provider, system_prompt, case.prompt, "")
     return resp.content, resp.input_tokens, resp.output_tokens
 
 
@@ -124,7 +138,7 @@ def grade_expectation(
     judge: LLMProvider, report: str, expectation: str
 ) -> tuple[Verdict, int, int]:
     user = f"REPORT:\n{report}\n\nEXPECTATION:\n{expectation}"
-    resp = judge.complete(system_prompt=_JUDGE_SYSTEM, user_prompt=user)
+    resp = with_retry(judge, _JUDGE_SYSTEM, user, "")
     return _parse_verdict(resp.content, expectation), resp.input_tokens, resp.output_tokens
 
 
@@ -141,18 +155,22 @@ def grade_case(
     report, in_tok, out_tok = run_case(subject, system_prompt, case)
     deterministic = _deterministic_checks(report)
     verdicts: list[Verdict] = []
+    judge_in = 0
+    judge_out = 0
     for expectation in case.expectations:
         verdict, v_in, v_out = grade_expectation(judge, report, expectation)
         verdicts.append(verdict)
-        in_tok += v_in
-        out_tok += v_out
+        judge_in += v_in
+        judge_out += v_out
     return CaseResult(
         case_id=case.id,
         report=report,
         deterministic=deterministic,
         verdicts=verdicts,
-        input_tokens=in_tok,
+        input_tokens=in_tok,  # subject only
         output_tokens=out_tok,
+        judge_input_tokens=judge_in,  # judge kept separate so it can be priced at its own rate
+        judge_output_tokens=judge_out,
     )
 
 
@@ -174,16 +192,24 @@ def grade_all(
         dc.ok for cr in case_results if not cr.skipped for dc in cr.deterministic
     )
     pass_rate = (passed / total) if total else 0.0
-    in_tok = sum(cr.input_tokens for cr in case_results)
-    out_tok = sum(cr.output_tokens for cr in case_results)
-    cost = estimate_cost_fn(subject_model, in_tok, out_tok) if estimate_cost_fn else 0.0
+    subj_in = sum(cr.input_tokens for cr in case_results)
+    subj_out = sum(cr.output_tokens for cr in case_results)
+    judge_in = sum(cr.judge_input_tokens for cr in case_results)
+    judge_out = sum(cr.judge_output_tokens for cr in case_results)
+    # Price subject and judge token pools each at their own model's rate; folding them
+    # together and using the subject rate misprices whenever the judge model differs.
+    cost = 0.0
+    if estimate_cost_fn:
+        cost = estimate_cost_fn(subject_model, subj_in, subj_out) + estimate_cost_fn(
+            judge_model, judge_in, judge_out
+        )
     return GradeSummary(
         pass_rate=pass_rate,
         deterministic_ok=deterministic_ok,
         total_expectations=total,
         passed_expectations=passed,
         cases=case_results,
-        input_tokens=in_tok,
-        output_tokens=out_tok,
+        input_tokens=subj_in + judge_in,
+        output_tokens=subj_out + judge_out,
         estimated_cost_usd=cost,
     )

@@ -93,3 +93,43 @@ def test_get_graph_refresh_bypasses_cache(tmp_path) -> None:
     get_graph(p, SCANNED, d)
     get_graph(p, SCANNED, d, refresh=True)
     assert p.complete.call_count == 2
+
+
+def test_cache_key_changes_with_model(tmp_path) -> None:
+    # A cached graph must not be reused after the model changes (different model can
+    # produce a materially different graph); switching models re-extracts.
+    d = str(tmp_path / "gc")
+    p = _provider(_VALID)
+    get_graph(p, SCANNED, d, model="haiku")
+    assert p.complete.call_count == 1
+    get_graph(p, SCANNED, d, model="opus")  # different model -> cache miss
+    assert p.complete.call_count == 2
+    get_graph(p, SCANNED, d, model="haiku")  # original model -> hit again
+    assert p.complete.call_count == 2
+
+
+def test_cache_key_changes_with_extract_tokens(tmp_path) -> None:
+    d = str(tmp_path / "gc")
+    p = _provider(_VALID)
+    get_graph(p, SCANNED, d, extract_tokens=150_000)
+    get_graph(p, SCANNED, d, extract_tokens=80_000)  # different budget -> cache miss
+    assert p.complete.call_count == 2
+
+
+def test_extract_graph_records_token_usage() -> None:
+    g = extract_graph(_provider(_VALID), SCANNED)
+    assert g is not None
+    assert g.extract_input_tokens == 1  # from the mocked ProviderResponse
+    assert g.extract_output_tokens == 1
+
+
+def test_truncated_graph_is_flagged_and_not_cached(tmp_path) -> None:
+    # A tiny extract-token budget forces _pack to drop files. The resulting graph does not
+    # reflect the whole repo, so it must be flagged truncated and NOT cached (else the
+    # partial graph is served forever). Every run re-extracts.
+    d = str(tmp_path / "gc")
+    p = _provider(_VALID)
+    g = get_graph(p, SCANNED, d, extract_tokens=1)
+    assert g is not None and g.truncated is True
+    get_graph(p, SCANNED, d, extract_tokens=1)  # not cached -> extracts again
+    assert p.complete.call_count == 2

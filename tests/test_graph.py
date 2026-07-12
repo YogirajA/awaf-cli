@@ -86,6 +86,27 @@ def test_from_dict_tolerates_json_nulls() -> None:
     assert g.files[0].path == "" and g.files[0].role == "other"
 
 
+def test_graph_from_dict_normalizes_path_separators() -> None:
+    # LLM may echo backslash paths on Windows; they must be canonicalized so anchor and
+    # slice lookups against forward-slash scanned-file keys succeed.
+    d = {
+        "nodes": [{"id": "a", "type": "agent", "name": "A", "file": "src\\agent.py", "line": 1}],
+        "edges": [{"from": "a", "to": "b", "type": "calls", "file": "src\\agent.py", "line": 2}],
+        "files": [{"path": "src\\agent.py", "role": "agent"}],
+    }
+    g = graph_from_dict(d)
+    assert g.nodes[0].file == "src/agent.py"
+    assert g.edges[0].file == "src/agent.py"
+    assert g.files[0].path == "src/agent.py"
+
+
+def test_architecture_graph_has_truncation_and_extraction_fields() -> None:
+    g = ArchitectureGraph()
+    assert g.truncated is False
+    assert g.extract_input_tokens == 0
+    assert g.extract_output_tokens == 0
+
+
 def test_content_hash_is_stable_and_change_sensitive() -> None:
     a = [("a.py", "x = 1"), ("b.py", "y = 2")]
     assert content_hash(a) == content_hash(list(reversed(a)))  # order-independent

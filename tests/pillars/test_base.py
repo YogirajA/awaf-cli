@@ -119,6 +119,45 @@ def test_pillar_result_has_latency_field() -> None:
     assert PillarResult(name="X", score=0.0, confidence="partial").latency_ms == 0
 
 
+def test_non_dict_finding_element_does_not_crash_pillar() -> None:
+    # Weaker models sometimes emit findings as a list of strings. Pre-fix this raised
+    # AttributeError inside _structure_finding and dropped the whole (scoreable) pillar.
+    resp = {
+        "score": 90,
+        "confidence": "verified",
+        "findings": ["no issues found", {"severity": "High", "detail": "real issue"}],
+    }
+    result = _AGENT._parse_response(json.dumps(resp))
+    assert result.score == 90  # pillar still scored, not dropped
+    # both elements survive: the string is coerced into a detail-only finding
+    details = [f["detail"] for f in result.findings]
+    assert "no issues found" in details
+    assert "real issue" in details
+
+
+def test_finding_file_normalized_to_forward_slashes() -> None:
+    # On Windows the model may echo backslash paths; the stored file (and thus the
+    # fingerprint) must be canonical forward-slash so it is stable across runs/platforms.
+    resp = {
+        "score": 70,
+        "confidence": "partial",
+        "findings": [{"title": "t", "severity": "High", "detail": "d", "file": "awaf\\cli.py"}],
+    }
+    result = _AGENT._parse_response(json.dumps(resp))
+    assert result.findings[0]["file"] == "awaf/cli.py"
+
+
+def test_parse_failed_flag_set_on_unparseable_and_clear_on_success() -> None:
+    from awaf.pillars.base import PillarResult
+
+    ok = _AGENT._parse_response(_json_str())
+    assert ok.parse_failed is False
+    bad = _AGENT._parse_response("not json at all")
+    assert bad.parse_failed is True
+    # default is False so callers that build PillarResult directly are unaffected
+    assert PillarResult(name="X", score=0.0, confidence="partial").parse_failed is False
+
+
 _EVAL_JSON = (
     '{"score": 80, "confidence": "verified", '
     '"findings": [{"title": "bad-thing", "severity": "High", "detail": "d", '

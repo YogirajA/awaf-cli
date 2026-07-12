@@ -46,6 +46,13 @@ class ArchitectureGraph:
     edges: list[GraphEdge] = field(default_factory=list)
     files: list[FileEntry] = field(default_factory=list)
     content_hash: str = ""
+    # True when the extraction payload was truncated (repo exceeded the extract-token cap),
+    # so the graph does not reflect the whole repo. Runtime-only; never cached/serialized.
+    truncated: bool = False
+    # Tokens spent by the extraction LLM call, for cost/budget accounting. Runtime-only:
+    # a cache hit reuses a stored graph at zero marginal cost, so these stay 0.
+    extract_input_tokens: int = 0
+    extract_output_tokens: int = 0
 
 
 def content_hash(scanned_files: list[tuple[str, str]]) -> str:
@@ -63,6 +70,12 @@ def _line_or_none(v: Any) -> int | None:
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
+def _posix(path: str) -> str:
+    """Canonicalize a file path to forward slashes so LLM-returned paths match the
+    forward-slash scanned-file keys regardless of the platform the model inferred."""
+    return path.replace("\\", "/")
+
+
 def graph_from_dict(d: dict[str, Any]) -> ArchitectureGraph:
     nodes: list[GraphNode] = []
     for n in d.get("nodes", []) or []:
@@ -73,7 +86,7 @@ def graph_from_dict(d: dict[str, Any]) -> ArchitectureGraph:
                 id=str(n.get("id") or ""),
                 type=str(n.get("type") or ""),
                 name=str(n.get("name") or ""),
-                file=str(n.get("file") or ""),
+                file=_posix(str(n.get("file") or "")),
                 line=_line_or_none(n.get("line")),
                 evidence=str(n.get("evidence") or ""),
                 attrs=attrs,
@@ -88,7 +101,7 @@ def graph_from_dict(d: dict[str, Any]) -> ArchitectureGraph:
                 src=str(e.get("src") or e.get("from") or ""),
                 dst=str(e.get("dst") or e.get("to") or ""),
                 type=str(e.get("type") or ""),
-                file=str(e.get("file") or ""),
+                file=_posix(str(e.get("file") or "")),
                 line=_line_or_none(e.get("line")),
                 attrs=attrs,
             )
@@ -97,7 +110,7 @@ def graph_from_dict(d: dict[str, Any]) -> ArchitectureGraph:
     for f in d.get("files", []) or []:
         files.append(
             FileEntry(
-                path=str(f.get("path") or ""),
+                path=_posix(str(f.get("path") or "")),
                 role=str(f.get("role") or "other"),
                 summary=str(f.get("summary") or ""),
             )
@@ -305,11 +318,18 @@ def load_cached_graph(content_hash: str, cache_dir: str) -> ArchitectureGraph | 
         return None
 
 
-def store_graph(graph: ArchitectureGraph, cache_dir: str, max_keep: int = 8) -> None:
-    """Best-effort cache write plus LRU prune. Never raises."""
+def store_graph(
+    graph: ArchitectureGraph, cache_dir: str, max_keep: int = 8, key: str | None = None
+) -> None:
+    """Best-effort cache write plus LRU prune. Never raises.
+
+    *key* is the cache filename stem; defaults to the graph's content hash. Callers that
+    fold extra material (model, schema version, budget) into the identity pass it explicitly.
+    """
     try:
         os.makedirs(cache_dir, exist_ok=True)
-        with open(_cache_file(graph.content_hash, cache_dir), "w", encoding="utf-8") as fh:
+        cache_key = key if key is not None else graph.content_hash
+        with open(_cache_file(cache_key, cache_dir), "w", encoding="utf-8") as fh:
             fh.write(graph_to_json(graph))
         entries = [os.path.join(cache_dir, f) for f in os.listdir(cache_dir) if f.endswith(".json")]
         entries.sort(key=lambda p: os.path.getmtime(p), reverse=True)

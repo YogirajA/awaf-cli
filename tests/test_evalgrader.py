@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from awaf import evalgrader
-from awaf.providers.base import ProviderResponse
+from awaf.providers.base import ProviderRateLimitError, ProviderResponse
 
 _REPORT = """\
 AWAF v1.4 report
@@ -121,6 +121,65 @@ def test_string_passed_fails_closed() -> None:
     # A judge returning the boolean as a string is not trusted; fail closed either way.
     assert evalgrader._parse_verdict('{"passed": "false", "reason": "no"}', "exp").passed is False
     assert evalgrader._parse_verdict('{"passed": "true", "reason": "yes"}', "exp").passed is False
+
+
+def test_judge_tokens_priced_at_judge_rate(tmp_path: Path) -> None:
+    # The eval workflow uses an expensive judge with a cheaper subject. Judge tokens must be
+    # priced at the JUDGE model's rate, not folded in and priced at the subject rate.
+    _write_skill(tmp_path)  # 1 case, 2 expectations
+
+    def _cost(model: str, in_tok: int, out_tok: int) -> float:
+        rate = 10.0 if model == "opus" else 1.0
+        return in_tok * rate
+
+    summary = evalgrader.grade_all(
+        _subject(),
+        _judge(True),
+        tmp_path,
+        estimate_cost_fn=_cost,
+        subject_model="haiku",
+        judge_model="opus",
+    )
+    # subject: 1 call * 10 in @1  = 10 ; judge: 2 calls * 10 in @10 = 200
+    assert summary.estimated_cost_usd == 10.0 + 200.0
+
+
+def test_load_skill_prompt_includes_all_reference_files(tmp_path: Path) -> None:
+    base = tmp_path / "skills" / "awaf"
+    (base / "references").mkdir(parents=True)
+    (base / "SKILL.md").write_text("skill body", encoding="utf-8")
+    (base / "references" / "output-format.md").write_text("output format ref", encoding="utf-8")
+    (base / "references" / "html-report.md").write_text("html report ref", encoding="utf-8")
+    prompt = evalgrader.load_skill_prompt(tmp_path)
+    assert "skill body" in prompt
+    assert "output format ref" in prompt
+    assert "html report ref" in prompt  # every reference is included, not just output-format
+
+
+def test_transient_provider_error_is_retried(monkeypatch, tmp_path: Path) -> None:
+    _write_skill(tmp_path)
+    monkeypatch.setattr("awaf.retry.time.sleep", lambda *_a, **_k: None)
+
+    class FlakyJudge:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, system_prompt, user_prompt, artifact_content=None):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 1:
+                raise ProviderRateLimitError("slow down", "fake", "m")
+            return ProviderResponse(
+                content=json.dumps({"passed": True, "reason": "ok"}),
+                input_tokens=1,
+                output_tokens=1,
+                model="m",
+                provider="fake",
+                latency_ms=1,
+            )
+
+    # A single transient error must not abort the whole eval; with_retry recovers.
+    summary = evalgrader.grade_all(_subject(), FlakyJudge(), tmp_path)
+    assert summary.passed_expectations >= 1
 
 
 def test_grade_all_excludes_skipped_from_deterministic_ok(tmp_path: Path) -> None:

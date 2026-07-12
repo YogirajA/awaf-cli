@@ -48,6 +48,26 @@ _API_KEY_ENV: dict[str, str] = {
 }
 
 
+def _resolve_int(env_name: str, fallback: object) -> int:
+    """Return int(env value) when the env var is set to a parseable number, else int(fallback).
+
+    Tolerates a set-but-empty or non-numeric env var (e.g. a CI 'env:' block with an unset
+    secret) so graph config resolution degrades gracefully instead of raising ValueError.
+    """
+    raw = os.environ.get(env_name)
+    if raw is not None and raw.strip():
+        try:
+            return int(raw.strip())
+        except ValueError:
+            pass
+    if isinstance(fallback, int):
+        return fallback
+    try:
+        return int(str(fallback))
+    except (ValueError, TypeError):
+        return 0
+
+
 def _read_toml(path: str) -> dict:  # type: ignore[type-arg]
     """Read awaf.toml from *path*. Returns empty dict if the file doesn't exist."""
     if not os.path.exists(path):
@@ -190,13 +210,11 @@ def resolve_graph_config(
         cfg.enabled = bool(table.get("enabled", True))
 
     cfg.refresh = bool(cli_refresh)
-    cfg.extract_tokens = int(
-        os.environ.get("AWAF_GRAPH_EXTRACT_TOKENS", table.get("extract_tokens", 150_000))
+    cfg.extract_tokens = _resolve_int(
+        "AWAF_GRAPH_EXTRACT_TOKENS", table.get("extract_tokens", 150_000)
     )
-    cfg.slice_budget = int(
-        os.environ.get("AWAF_GRAPH_SLICE_BUDGET", table.get("slice_budget", 12_000))
-    )
-    cfg.cache_max = int(os.environ.get("AWAF_GRAPH_CACHE_MAX", table.get("cache_max", 8)))
-    cfg.context_lines = int(table.get("context_lines", 20))
+    cfg.slice_budget = _resolve_int("AWAF_GRAPH_SLICE_BUDGET", table.get("slice_budget", 12_000))
+    cfg.cache_max = _resolve_int("AWAF_GRAPH_CACHE_MAX", table.get("cache_max", 8))
+    cfg.context_lines = _resolve_int("AWAF_GRAPH_CONTEXT_LINES", table.get("context_lines", 20))
     cfg.starvation_retry = bool(table.get("starvation_retry", True))
     return cfg

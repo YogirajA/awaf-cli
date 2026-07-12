@@ -38,8 +38,13 @@ def normalize_title(text: str) -> str:
 
 
 def fingerprint(pillar: str, title: str, file: str = "") -> str:
-    """Stable 12-hex-char identity for a finding: sha1(pillar | normalized title | file)."""
-    basis = f"{pillar}|{normalize_title(title)}|{file}"
+    """Stable 12-hex-char identity for a finding: sha1(pillar | normalized title | file).
+
+    The file component is canonicalized to forward slashes so the same file spelled with
+    backslashes (Windows) or forward slashes yields one identity across runs and platforms.
+    """
+    file_posix = file.replace("\\", "/")
+    basis = f"{pillar}|{normalize_title(title)}|{file_posix}"
     return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
 
 
@@ -67,6 +72,15 @@ class LifecycleResult:
     @property
     def counts(self) -> tuple[int, int, int]:
         return (len(self.new), len(self.recurring), len(self.resolved))
+
+
+def filter_by_pillars(findings: list[dict[str, Any]], pillars: set[str]) -> list[dict[str, Any]]:
+    """Keep only findings whose pillar is in *pillars*.
+
+    Used to scope a lifecycle diff to the pillars evaluated in BOTH the current and previous
+    runs, so a single-pillar (`--pillar`) run is not diffed against a full run (which would
+    falsely report every other pillar's findings as resolved)."""
+    return [f for f in findings if str(f.get("pillar") or "") in pillars]
 
 
 def classify_findings(

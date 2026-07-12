@@ -30,8 +30,15 @@ def db_path() -> str:
 
 
 def graph_cache_dir() -> str:
-    """Directory for the code-graph cache, co-located next to the SQLite db file."""
-    return os.path.join(os.path.dirname(db_path()), "graph_cache")
+    """Directory for the code-graph cache, co-located next to the SQLite db file.
+
+    For a non-file DB URL (e.g. postgres) or an engine URL variant db_path() cannot reduce
+    to a filesystem path, fall back to a cache dir in the CWD rather than deriving a nonsense
+    path from the URL (which would fail os.makedirs and silently disable the cache).
+    """
+    p = db_path()
+    directory = os.path.dirname(p) if p and "://" not in p else ""
+    return os.path.join(directory, "graph_cache")
 
 
 class _Base(DeclarativeBase):

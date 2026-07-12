@@ -60,7 +60,9 @@ def label_matches_score(text: str) -> CheckResult:
         if "overall" not in line.lower():
             continue
         present = [lab for lab in _LABELS if lab in line]
-        m = re.search(r"\b(\d{1,3})\s*/\s*100\b", line) or re.search(r"\b(\d{1,3})\b", line)
+        # Only the explicit N/100 score form is trusted. A bare number could be a version
+        # fragment ('v1.4') or a finding count ('3 High'), which must not be read as the score.
+        m = re.search(r"\b(\d{1,3})\s*/\s*100\b", line)
         if len(present) == 1 and m:
             score = int(m.group(1))
             if 0 <= score <= 100:

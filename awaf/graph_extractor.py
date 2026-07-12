@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable
@@ -19,6 +20,10 @@ from awaf.providers.base import LLMProvider
 from awaf.retry import with_retry
 
 logger = logging.getLogger(__name__)
+
+# Bump when EXTRACTION_SYSTEM_PROMPT or the node/role taxonomy changes materially, so
+# graphs cached by an older extractor are not silently reused.
+EXTRACTION_SCHEMA_VERSION = "1"
 
 EXTRACTION_SYSTEM_PROMPT = """\
 You are an expert AI systems architect. Extract the AGENT-ARCHITECTURE GRAPH from the
@@ -60,18 +65,37 @@ def _loads_lenient(raw: str) -> dict[str, Any] | None:
 
 def _pack(
     scanned_files: list[tuple[str, str]], count_tokens: Callable[[str], int], budget: int
-) -> str:
+) -> tuple[str, bool]:
+    """Pack files into the extraction payload up to *budget* tokens.
+
+    Returns (payload, truncated). *truncated* is True when one or more files did not fit,
+    so the caller knows the graph does not reflect the whole repo and must not be cached.
+    """
     chunks: list[str] = []
     used = 0
+    truncated = False
     for path, text in scanned_files:
         chunk = f"# File: {path}\n{text}\n"
         t = count_tokens(chunk)
         if used + t > budget:
             logger.warning("Graph extraction payload hit %d-token cap; repo truncated.", budget)
+            truncated = True
             break
         chunks.append(chunk)
         used += t
-    return "\n".join(chunks)
+    return "\n".join(chunks), truncated
+
+
+def _cache_key(scanned_files: list[tuple[str, str]], model: str, extract_tokens: int) -> str:
+    """Cache identity for an extracted graph.
+
+    Beyond the repo content, it folds in the model, the extractor schema version, and the
+    extract-token budget: any of these changing can change the graph, so a stale cached
+    graph must not be reused (the old key was content-only, finding: silent stale reuse).
+    """
+    base = content_hash(scanned_files)
+    material = f"{base}|{model}|{EXTRACTION_SCHEMA_VERSION}|{extract_tokens}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 def extract_graph(
@@ -87,7 +111,7 @@ def extract_graph(
     or valid-but-wrong-shaped JSON that graph_from_dict cannot destructure.
     """
     try:
-        payload = _pack(scanned_files, provider.count_tokens, extract_tokens)
+        payload, truncated = _pack(scanned_files, provider.count_tokens, extract_tokens)
         resp = with_retry(
             provider,
             EXTRACTION_SYSTEM_PROMPT,
@@ -108,6 +132,9 @@ def extract_graph(
                 "Graph extraction produced no usable evidence; falling back to raw dump."
             )
             return None
+        graph.truncated = truncated
+        graph.extract_input_tokens = resp.input_tokens
+        graph.extract_output_tokens = resp.output_tokens
         return graph
     except Exception as exc:
         # Broad by design: extraction is optional. Any error degrades to the raw-dump path
@@ -123,14 +150,37 @@ def get_graph(
     refresh: bool = False,
     extract_tokens: int = 150_000,
     cache_max: int = 8,
+    model: str = "",
 ) -> ArchitectureGraph | None:
-    """Load the cached graph for this repo state, or extract and store it. None => fallback."""
-    h = content_hash(scanned_files)
+    """Load the cached graph for this repo state, or extract and store it. None => fallback.
+
+    The cache key covers the repo content, the *model*, the extractor schema version, and
+    *extract_tokens*, so changing any of them re-extracts instead of serving a stale graph.
+    A truncated graph (repo exceeded the extract-token cap) is returned for this run but
+    NOT cached, so it is not served forever with files permanently missing.
+    """
+    key = _cache_key(scanned_files, model, extract_tokens)
     if not refresh:
-        cached = load_cached_graph(h, cache_dir)
+        cached = load_cached_graph(key, cache_dir)
         if cached is not None:
             return cached
     graph = extract_graph(provider, scanned_files, extract_tokens)
-    if graph is not None:
-        store_graph(graph, cache_dir, max_keep=cache_max)
+    if graph is not None and not graph.truncated:
+        store_graph(graph, cache_dir, max_keep=cache_max, key=key)
     return graph
+
+
+def is_cached(
+    scanned_files: list[tuple[str, str]],
+    cache_dir: str,
+    extract_tokens: int = 150_000,
+    model: str = "",
+) -> bool:
+    """Whether a graph for this exact (repo, model, schema, budget) is already on disk.
+
+    Cheap existence check (no parse) used by the `graph` command to report hit vs new."""
+    import os
+
+    return os.path.exists(
+        os.path.join(cache_dir, f"{_cache_key(scanned_files, model, extract_tokens)}.json")
+    )

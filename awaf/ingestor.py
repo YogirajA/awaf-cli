@@ -122,7 +122,7 @@ def ingest(
             candidates = _walk(base_path, excludes)
 
         for abs_path in candidates:
-            rel_path = os.path.relpath(abs_path)
+            rel_path = os.path.relpath(abs_path).replace(os.sep, "/")
 
             # Size gate
             try:
@@ -174,6 +174,10 @@ def ingest_files(
     budget -- the code-graph extractor needs to see the full repo and enforces its own
     (much larger) token cap when packing the extraction payload. This is what delivers the
     no-truncation benefit of graph mode over the raw-dump path.
+
+    Files are read WITHOUT minification: the graph records file:line anchors that are shown
+    to users and stored, so they must reference real on-disk lines. Minification deletes
+    blank/comment/docstring lines and would shift every anchor below the deletion.
     """
     excludes = set(_DEFAULT_EXCLUDE + (exclude_patterns or []))
     pairs: list[tuple[str, str]] = []
@@ -188,7 +192,7 @@ def ingest_files(
             candidates = _walk(base_path, excludes)
 
         for abs_path in candidates:
-            rel_path = os.path.relpath(abs_path)
+            rel_path = os.path.relpath(abs_path).replace(os.sep, "/")
 
             try:
                 size = os.path.getsize(abs_path)
@@ -198,7 +202,7 @@ def ingest_files(
                 continue
 
             try:
-                text = _read_file(abs_path)
+                text = _read_file(abs_path, minify=False)
             except (OSError, UnicodeDecodeError):
                 continue
 
@@ -222,11 +226,11 @@ def _walk(base: str, excludes: set[str]) -> list[str]:
     return sorted(results)
 
 
-def _read_file(path: str) -> str:
+def _read_file(path: str, minify: bool = _MINIFY) -> str:
     with open(path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     ext = os.path.splitext(path)[1].lower()
-    if _MINIFY:
+    if minify:
         text = _minify(text, ext)
     lines = text.splitlines(keepends=True)
     if len(lines) > _MAX_FILE_LINES:

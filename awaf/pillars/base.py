@@ -42,6 +42,7 @@ class PillarResult:
     na_reason: str = ""
     suspect: bool = False
     suspect_reason: str = ""
+    parse_failed: bool = False  # True when the LLM response could not be parsed as JSON
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +166,9 @@ class PillarAgent(ABC):
         if it falls outside the file's actual range (or the file is unknown).
         """
         title = str(f.get("title") or "").strip()
-        file = str(f.get("file") or "").strip()
+        # Canonicalize path separators so anchors and fingerprints are stable across
+        # runs and platforms (a model may echo backslash paths on Windows).
+        file = str(f.get("file") or "").strip().replace("\\", "/")
         line = f.get("line")
         if not isinstance(line, int) or isinstance(line, bool):
             line = None
@@ -259,14 +262,25 @@ class PillarAgent(ABC):
                     )
                 ],
                 evidence_gaps=["LLM response was not valid JSON; re-run to retry"],
+                parse_failed=True,
             )
 
         not_applicable = bool(data.get("not_applicable", False))
+        # Tolerate non-dict finding elements (some models emit a list of strings). Coerce
+        # each to a detail-only finding so a schema-drifted response never crashes and drops
+        # an otherwise-scoreable pillar.
+        raw_findings = data.get("findings", [])
+        if not isinstance(raw_findings, list):
+            raw_findings = []
+        findings = [
+            self._structure_finding(f if isinstance(f, dict) else {"detail": str(f)}, files_by_len)
+            for f in raw_findings
+        ]
         return PillarResult(
             name=self.name,
             score=float(data.get("score", 0)),
             confidence=str(data.get("confidence", "self_reported")),
-            findings=[self._structure_finding(f, files_by_len) for f in data.get("findings", [])],
+            findings=findings,
             recommendations=list(data.get("recommendations", [])),
             evidence_gaps=list(data.get("evidence_gaps", [])),
             improve_suggestions=list(data.get("improve_suggestions", [])),

@@ -87,6 +87,37 @@ _PILLAR_ROWS: list[tuple[str, str, str, bool]] = [
 ]
 
 
+def _load_findings_list(blob: str) -> list[dict[str, Any]]:
+    """Parse a findings JSON blob into a list of dict findings. Never raises.
+
+    Tolerates a legacy or hand-edited row whose findings column is valid JSON but not a list
+    of dicts (a bare object, or a list of strings): those flow into classify_findings ->
+    finding_signature and would crash with AttributeError otherwise.
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(blob)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [f for f in data if isinstance(f, dict)]
+
+
+def _evaluated_pillars(rec: object) -> set[str]:
+    """Pillar display-names a stored assessment actually evaluated (non-null score column).
+
+    Lets a lifecycle diff be scoped to pillars present in BOTH runs, so a `--pillar` run is
+    never diffed against a full run (which would falsely report other pillars as resolved).
+    """
+    return {
+        name
+        for name, score_attr, _conf_attr, _is_t2 in _PILLAR_ROWS
+        if getattr(rec, score_attr, None) is not None
+    }
+
+
 def _readiness_label(score: float) -> str:
     for threshold, label in _READINESS:
         if score >= threshold:
@@ -618,8 +649,59 @@ def run(
         click.echo("No agent files found to analyze. Check --paths or awaf.toml [files].", err=True)
         sys.exit(2)
 
-    # Abort if token budget was exhausted — a partial codebase produces misleading scores
-    if ingest_result.truncated and not allow_partial_scan:
+    # Code-graph evidence — extracted BEFORE the raw-dump budget aborts so that, when a
+    # usable graph is available, pillars are evaluated on the whole-repo graph (not the
+    # budget-truncated raw dump) and the raw-dump truncation/context aborts do not fire on
+    # exactly the large repos graph mode exists to handle. A None graph (disabled or
+    # extraction failed) makes run_assessment fall back to the raw dump, unchanged.
+    graph_cfg = resolve_graph_config(cli_graph=use_graph, cli_refresh=refresh_graph)
+    architecture_graph = None
+    scanned_files_map: dict[str, str] = {}
+    if graph_cfg.enabled:
+        try:
+            scanned_pairs = ingest_files(
+                paths=scan_paths,
+                exclude_patterns=toml_data.get("files", {}).get("exclude", []),
+            )
+            architecture_graph = get_graph(
+                llm_provider,
+                scanned_pairs,
+                graph_cache_dir(),
+                refresh=graph_cfg.refresh,
+                extract_tokens=graph_cfg.extract_tokens,
+                cache_max=graph_cfg.cache_max,
+                model=effective_model,
+            )
+            scanned_files_map = dict(scanned_pairs)
+        except Exception as exc:
+            # Graph evidence is optional. Any unexpected failure degrades to the raw-dump path
+            # rather than breaking the run (get_graph already never raises; this guards
+            # ingest_files and any future regression in the graph modules).
+            click.echo(
+                f"  ⚠ Graph evidence unavailable ({exc}); using raw artifact evidence.",
+                err=True,
+            )
+            architecture_graph = None
+            scanned_files_map = {}
+
+    graph_active = architecture_graph is not None
+    # Extraction spend (0 on a cache hit or when falling back to the raw dump).
+    _extract_in = architecture_graph.extract_input_tokens if architecture_graph else 0
+    _extract_out = architecture_graph.extract_output_tokens if architecture_graph else 0
+    extract_cost = (
+        estimate_cost(effective_model, _extract_in, _extract_out) if architecture_graph else 0.0
+    )
+    if architecture_graph is not None and architecture_graph.truncated:
+        click.echo(
+            "  ⚠ Repo exceeded the graph extraction token cap; the graph is partial "
+            "(raise AWAF_GRAPH_EXTRACT_TOKENS to include more).",
+            err=True,
+        )
+
+    # Abort if token budget was exhausted — a partial codebase produces misleading scores.
+    # Skipped when a usable graph is available: pillars are graded on the graph (whole repo),
+    # so the raw dump being truncated is not fatal.
+    if ingest_result.truncated and not allow_partial_scan and not graph_active:
         token_skipped = [s for s in ingest_result.files_skipped if "token limit" in s]
         click.echo("", err=True)
         click.echo("ERROR: Token budget exhausted — assessment aborted.", err=True)
@@ -671,7 +753,9 @@ def run(
     from awaf.pricing import estimate_cost as _estimate_cost
 
     est_preflight_cost = _estimate_cost(effective_model, est_total_input, est_output_total)
-    est_total_cost = est_preflight_cost * runs
+    # Graph extraction is a real (one-time) LLM cost that must be counted in the preflight
+    # estimate and the budget abort, not just pillar calls.
+    est_total_cost = est_preflight_cost * runs + extract_cost
 
     click.echo("  PREFLIGHT")
     click.echo(
@@ -684,17 +768,22 @@ def run(
         f"  Total est      {est_total_input:>9,} tokens"
         f"  ({_n_pillars} pillars × ~{est_per_pillar:,})"
     )
+    if extract_cost > 0:
+        click.echo(f"  Graph extract       ~${extract_cost:.4f}  ({_extract_in:,} in tokens)")
     if runs > 1:
         click.echo(
-            f"  Cost est            ~${est_preflight_cost:.4f}/run × {runs} runs = ~${est_total_cost:.4f}"
+            f"  Cost est            ~${est_preflight_cost:.4f}/run × {runs} runs"
+            f" + graph = ~${est_total_cost:.4f}"
         )
     else:
-        click.echo(f"  Cost est            ~${est_preflight_cost:.4f}")
+        click.echo(f"  Cost est            ~${est_total_cost:.4f}")
     click.echo(_SEP)
 
-    # Auto-abort: artifacts fill too much of the context window
+    # Auto-abort: artifacts fill too much of the context window. Skipped when a usable graph
+    # is available: pillars receive the much smaller graph block, not the raw dump ctx_pct
+    # is measured from.
     _max_ctx_pct = float(os.environ.get("AWAF_MAX_CONTEXT_PCT", "85"))
-    if ctx_pct >= _max_ctx_pct:
+    if ctx_pct >= _max_ctx_pct and not graph_active:
         click.echo(
             f"ERROR: artifacts occupy {ctx_pct:.0f}% of the {effective_model} context window"
             f" (limit: {_max_ctx_pct:.0f}%). Assessment aborted — scores would be unreliable.",
@@ -737,41 +826,13 @@ def run(
         ]
         artifact_content = "\n".join(note_lines) + "\n" + artifact_content
 
-    # Code-graph evidence (optional; a None graph makes run_assessment fall back to the
-    # raw artifact_content dump above -- behavior is unchanged from today when disabled
-    # or when extraction fails).
-    graph_cfg = resolve_graph_config(cli_graph=use_graph, cli_refresh=refresh_graph)
-    architecture_graph = None
-    scanned_files_map: dict[str, str] = {}
-    if graph_cfg.enabled:
-        try:
-            scanned_pairs = ingest_files(
-                paths=scan_paths,
-                exclude_patterns=toml_data.get("files", {}).get("exclude", []),
-            )
-            architecture_graph = get_graph(
-                llm_provider,
-                scanned_pairs,
-                graph_cache_dir(),
-                refresh=graph_cfg.refresh,
-                extract_tokens=graph_cfg.extract_tokens,
-                cache_max=graph_cfg.cache_max,
-            )
-            scanned_files_map = dict(scanned_pairs)
-        except Exception as exc:
-            # Graph evidence is optional. Any unexpected failure degrades to the raw-dump
-            # path rather than breaking the run (get_graph already never raises; this guards
-            # ingest_files and any future regression in the graph modules).
-            click.echo(
-                f"  ⚠ Graph evidence unavailable ({exc}); using raw artifact evidence.",
-                err=True,
-            )
-            architecture_graph = None
-            scanned_files_map = {}
-
     # Run pillar agents (single run or multi-run loop)
     def _on_pillar_start(name: str) -> None:
         click.echo(f"  \u25b8 Evaluating {name}...")
+
+    # Charge graph extraction against the session budget so the pillar guard trips earlier
+    # (extraction already spent that money); pillar cost stays reported separately.
+    _pillar_budget = None if budget_usd is None else max(0.0, budget_usd - extract_cost)
 
     all_assessments: list[Any] = []
     for run_idx in range(runs):
@@ -782,7 +843,7 @@ def run(
                 provider=llm_provider,
                 artifact_content=artifact_content,
                 pillar_filter=pillar,
-                session_budget_usd=budget_usd,
+                session_budget_usd=_pillar_budget,
                 estimate_cost_fn=estimate_cost,
                 model=effective_model,
                 pillar_delay_seconds=float(delay),
@@ -802,6 +863,12 @@ def run(
             click.echo(f"    Score: {int(_result.overall_score)}/100")
 
     assessment = _average_assessments(all_assessments) if runs > 1 else all_assessments[0]
+
+    # Fold the one-time graph-extraction spend into the reported totals so displayed and
+    # saved cost/tokens reflect the full run (pillar costs plus extraction).
+    assessment.total_input_tokens += _extract_in
+    assessment.total_output_tokens += _extract_out
+    assessment.estimated_cost_usd += extract_cost
 
     # Display
     _label = _readiness_label(assessment.overall_score)
@@ -831,11 +898,19 @@ def run(
         _print_variance_table(all_assessments)
         _print_variance_chart(all_assessments, out)
 
-    click.echo(f"  FILES ANALYZED     {len(ingest_result.files_scanned)} files")
-    if ingest_result.files_skipped:
-        click.echo(f"  FILES NOT SCANNED  {len(ingest_result.files_skipped)} files")
-        for s in ingest_result.files_skipped[:5]:
-            click.echo(f"    {s}")
+    # Coverage reflects what the pillars actually saw: the whole-repo graph file set when
+    # graph mode is active (unbudgeted), else the raw-dump scan (which the token budget may
+    # have truncated). Reporting ingest_result here in graph mode would misdescribe coverage.
+    if graph_active:
+        analyzed_files = sorted(scanned_files_map.keys())
+        click.echo(f"  FILES ANALYZED     {len(analyzed_files)} files  (code-graph evidence)")
+    else:
+        analyzed_files = list(ingest_result.files_scanned)
+        click.echo(f"  FILES ANALYZED     {len(analyzed_files)} files")
+        if ingest_result.files_skipped:
+            click.echo(f"  FILES NOT SCANNED  {len(ingest_result.files_skipped)} files")
+            for s in ingest_result.files_skipped[:5]:
+                click.echo(f"    {s}")
     if assessment.budget_exceeded:
         click.echo("  WARNING: session budget exceeded; some pillars skipped")
 
@@ -885,16 +960,20 @@ def run(
     # Lifecycle vs the previous run, loaded BEFORE this run's rows are saved,
     # so _prev_records[0] is the genuine previous run.
     from awaf.db import get_recent_assessments
-    from awaf.findings import classify_findings, finding_signature
+    from awaf.findings import classify_findings, filter_by_pillars, finding_signature
 
     _prev_records = get_recent_assessments(project_name, limit=1)
-    _previous_findings: list[dict[str, Any]] = []
-    if _prev_records:
-        try:
-            _previous_findings = _json.loads(_prev_records[0].findings)
-        except (ValueError, TypeError):
-            _previous_findings = []
-    lifecycle = classify_findings(all_findings, _previous_findings)
+    _previous_findings = _load_findings_list(_prev_records[0].findings) if _prev_records else []
+    # Diff only pillars this run and the previous run BOTH evaluated. Without this a
+    # `--pillar security` run compared against a full run reports every other pillar as
+    # resolved, and the pillar-only row then poisons the next full run's diff.
+    _current_pillars = {r.name for r in assessment.pillar_results if not r.skipped}
+    _prev_pillars = _evaluated_pillars(_prev_records[0]) if _prev_records else set()
+    _comparable = _current_pillars & _prev_pillars
+    lifecycle = classify_findings(
+        filter_by_pillars(all_findings, _comparable),
+        filter_by_pillars(_previous_findings, _comparable),
+    )
     if all_findings and _prev_records:
         n, rec_, res = lifecycle.counts
         click.echo()
@@ -967,7 +1046,7 @@ def run(
             reasoning_confidence=_conf("Reasoning Integ."),
             controllability_confidence=_conf("Controllability"),
             context_integrity_confidence=_conf("Context Integrity"),
-            evidence_reviewed=_json.dumps(ingest_result.files_scanned),
+            evidence_reviewed=_json.dumps(analyzed_files),
             evidence_gaps=_json.dumps(all_gaps),
             findings=_json.dumps(all_findings),
             recommendations=_json.dumps(all_recs),
@@ -1010,8 +1089,11 @@ def run(
     # Emit JSONL run telemetry when enabled: informational only, never gates the exit code.
     if _telemetry.enabled:
         _writer = TraceWriter(_telemetry.trace_path)
-        for r in assessment.pillar_results:
-            _writer.pillar(_run_id, r)
+        # Emit per-pillar events from the real per-run results, not the averaged assessment
+        # (whose PillarResults carry no token/latency data, so every event would be zeros).
+        for _run in all_assessments:
+            for r in _run.pillar_results:
+                _writer.pillar(_run_id, r)
         _n, _rec, _res = lifecycle.counts
         _writer.run(
             _run_id,
@@ -1090,7 +1172,7 @@ def run(
 def graph(path: str, as_json: bool, refresh: bool) -> None:
     """Extract and inspect the code-architecture graph for PATH (default: current directory)."""
     from awaf.db import graph_cache_dir
-    from awaf.graph import content_hash, load_cached_graph
+    from awaf.graph_extractor import is_cached
     from awaf.ingestor import ingest_files
 
     toml_data = _read_toml()
@@ -1103,19 +1185,27 @@ def graph(path: str, as_json: bool, refresh: bool) -> None:
         click.echo(f"Configuration error: {exc}", err=True)
         sys.exit(2)
 
-    scanned_pairs = ingest_files(
-        paths=[path],
-        exclude_patterns=toml_data.get("files", {}).get("exclude", []),
-    )
+    # Guard file discovery: ingest_files -> os.path.relpath raises ValueError on Windows when
+    # PATH is on a different drive than the CWD; degrade to a clean error, not a traceback.
+    try:
+        scanned_pairs = ingest_files(
+            paths=[path],
+            exclude_patterns=toml_data.get("files", {}).get("exclude", []),
+        )
+    except Exception as exc:
+        click.echo(f"Could not scan {path}: {exc}", err=True)
+        sys.exit(2)
     if not scanned_pairs:
         click.echo(f"No files found to analyze under {path}.", err=True)
         sys.exit(2)
 
     cache_dir = graph_cache_dir()
+    model = getattr(config, "model", "") or ""
 
-    was_cached = False
-    if not refresh:
-        was_cached = load_cached_graph(content_hash(scanned_pairs), cache_dir) is not None
+    # Cheap existence probe (no parse); get_graph re-derives the same key and reads the file.
+    was_cached = (not refresh) and is_cached(
+        scanned_pairs, cache_dir, extract_tokens=graph_cfg.extract_tokens, model=model
+    )
 
     result = get_graph(
         llm_provider,
@@ -1124,6 +1214,7 @@ def graph(path: str, as_json: bool, refresh: bool) -> None:
         refresh=refresh,
         extract_tokens=graph_cfg.extract_tokens,
         cache_max=graph_cfg.cache_max,
+        model=model,
     )
 
     if result is None:
@@ -1373,22 +1464,32 @@ def eval_skill(
     from awaf import evalgrader
     from awaf.pricing import estimate_cost
 
-    subject_cfg = resolve_provider_config(cli_provider=provider, cli_model=model)
-    judge_model_effective = judge_model or subject_cfg.model
-    judge_cfg = resolve_provider_config(cli_provider=provider, cli_model=judge_model_effective)
-    subject = get_provider(subject_cfg)
-    judge = get_provider(judge_cfg)
-    subject.validate_config()
-    judge.validate_config()
+    # Configuration errors get the same clean exit-2 boundary as `run`, so CI can tell a
+    # missing API key / bad skill dir apart from a genuine eval regression (exit 1).
+    try:
+        subject_cfg = resolve_provider_config(cli_provider=provider, cli_model=model)
+        judge_model_effective = judge_model or subject_cfg.model
+        judge_cfg = resolve_provider_config(cli_provider=provider, cli_model=judge_model_effective)
+        subject = get_provider(subject_cfg)
+        judge = get_provider(judge_cfg)
+        subject.validate_config()
+        judge.validate_config()
+    except ProviderConfigError as exc:
+        click.echo(f"Configuration error: {exc}", err=True)
+        sys.exit(2)
 
-    summary = evalgrader.grade_all(
-        subject,
-        judge,
-        Path(skill_dir),
-        estimate_cost_fn=estimate_cost,
-        subject_model=subject_cfg.model,
-        judge_model=judge_cfg.model,
-    )
+    try:
+        summary = evalgrader.grade_all(
+            subject,
+            judge,
+            Path(skill_dir),
+            estimate_cost_fn=estimate_cost,
+            subject_model=subject_cfg.model,
+            judge_model=judge_cfg.model,
+        )
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        click.echo(f"Could not load skill eval cases from {skill_dir}: {exc}", err=True)
+        sys.exit(2)
 
     with open(output, "w", encoding="utf-8") as fh:
         fh.write(_json.dumps(asdict(summary), indent=2))
@@ -1399,6 +1500,14 @@ def eval_skill(
     )
     click.echo(f"Deterministic checks: {'PASS' if summary.deterministic_ok else 'FAIL'}")
     click.echo(f"Metrics written to {output}")
+
+    # Zero graded expectations is not a gate failure — nothing was evaluated. Exit 2 with a
+    # clear message so CI does not read a vacuous 0% pass rate as a skill regression.
+    if summary.total_expectations == 0:
+        click.echo(
+            "No expectations were evaluated (all eval cases were skipped or empty).", err=True
+        )
+        sys.exit(2)
 
     if summary.pass_rate < gate or not summary.deterministic_ok:
         click.echo(
@@ -1498,18 +1607,15 @@ def compare(id1: int, id2: int) -> None:
     click.echo(f"  #{id1}: {rec1.provider}/{rec1.model}  {rec1.created_at.strftime('%Y-%m-%d')}")
     click.echo(f"  #{id2}: {rec2.provider}/{rec2.model}  {rec2.created_at.strftime('%Y-%m-%d')}")
 
-    import json as _json
+    from awaf.findings import classify_findings, filter_by_pillars
 
-    from awaf.findings import classify_findings
-
-    def _load_findings(rec: object) -> list[dict[str, Any]]:
-        try:
-            loaded: list[dict[str, Any]] = _json.loads(getattr(rec, "findings", "[]"))
-            return loaded
-        except (ValueError, TypeError):
-            return []
-
-    _life = classify_findings(_load_findings(rec2), _load_findings(rec1))
+    # Scope the diff to pillars evaluated in BOTH assessments so comparing a single-pillar
+    # run against a full one does not falsely report the other pillars as resolved. Findings
+    # blobs are shape-guarded so a legacy/hand-edited row never crashes the diff.
+    _comparable = _evaluated_pillars(rec1) & _evaluated_pillars(rec2)
+    _cur = filter_by_pillars(_load_findings_list(rec2.findings), _comparable)
+    _prev = filter_by_pillars(_load_findings_list(rec1.findings), _comparable)
+    _life = classify_findings(_cur, _prev)
     _n, _rec, _res = _life.counts
     click.echo()
     click.echo(f"  Findings: {_n} new, {_rec} recurring, {_res} resolved (id{id1} -> id{id2})")
@@ -1576,23 +1682,16 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
 
     if fmt == "html":
         from awaf.db import get_recent_assessments as _get_recent
-        from awaf.findings import LifecycleResult, classify_findings
+        from awaf.findings import LifecycleResult, classify_findings, filter_by_pillars
         from awaf.report_html import render_html
 
-        try:
-            _cur_findings = _json.loads(rec.findings)
-            if not isinstance(_cur_findings, list):
-                _cur_findings = []
-        except (ValueError, TypeError):
-            _cur_findings = []
+        _cur_findings = _load_findings_list(rec.findings)
         _prev = _get_recent(rec.project_name or project_name, limit=2)
         life: LifecycleResult | None = None
         if len(_prev) >= 2 and _prev[0].id == rec.id:
-            try:
-                _prev_findings_html = _json.loads(_prev[1].findings)
-            except (ValueError, TypeError):
-                _prev_findings_html = []
-            life = classify_findings(_cur_findings, _prev_findings_html)
+            _cmp = _evaluated_pillars(rec) & _evaluated_pillars(_prev[1])
+            _prev_findings_html = filter_by_pillars(_load_findings_list(_prev[1].findings), _cmp)
+            life = classify_findings(filter_by_pillars(_cur_findings, _cmp), _prev_findings_html)
         click.echo(render_html(rec, life, project_name=project_name))
         return
 
@@ -1627,22 +1726,26 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
     # Evidence sections (full format only, or when data is present)
     evidence = _json.loads(rec.evidence_reviewed)
     gaps = _json.loads(rec.evidence_gaps)
-    findings = _json.loads(rec.findings)
+    findings = _load_findings_list(rec.findings)
     recs = _json.loads(rec.recommendations)
     improvements = _json.loads(rec.improve_suggestions)
 
     from awaf.db import get_recent_assessments as _get_recent
-    from awaf.findings import LifecycleResult, classify_findings, finding_signature
+    from awaf.findings import (
+        LifecycleResult,
+        classify_findings,
+        filter_by_pillars,
+        finding_signature,
+    )
 
     _prev = _get_recent(rec.project_name or project_name, limit=2)
     _life: LifecycleResult | None = None
     if len(_prev) >= 2 and _prev[0].id == rec.id:
-        # rec is the latest run; _prev[1] is the genuine prior run
-        try:
-            _prev_findings: list[dict[str, Any]] = _json.loads(_prev[1].findings)
-        except (ValueError, TypeError):
-            _prev_findings = []
-        _life = classify_findings(findings, _prev_findings)
+        # rec is the latest run; _prev[1] is the genuine prior run. Scope the diff to pillars
+        # evaluated in both, so a prior single-pillar run does not fabricate resolved/new.
+        _cmp = _evaluated_pillars(rec) & _evaluated_pillars(_prev[1])
+        _prev_findings = filter_by_pillars(_load_findings_list(_prev[1].findings), _cmp)
+        _life = classify_findings(filter_by_pillars(findings, _cmp), _prev_findings)
 
     if evidence or fmt == "full":
         click.echo()

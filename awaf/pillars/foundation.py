@@ -20,8 +20,9 @@ PATTERN CHECK (advisory, non-scored): Identify which pattern from the glossary b
 agent actually uses, then ask whether a simpler pattern would suffice. Complex, multi-step,
 adaptive tasks with real-time decisions warrant a true agent. Deterministic workflows, simple
 Q&A, or single-shot tool calls are better served by simpler patterns (workflow, augmented LLM,
-or prompt). If a simpler pattern would suffice, include a finding with severity "Caution" that
-names the observed pattern and the simpler alternative, but do NOT reduce the Foundation score.
+or prompt). If a simpler pattern would suffice, include a finding with severity "Medium" whose
+detail names the observed pattern and the simpler alternative, but do NOT reduce the Foundation
+score.
 The user may have already built the agent; this is retrospective guidance only.
 
 {_PATTERN_GLOSSARY}"""

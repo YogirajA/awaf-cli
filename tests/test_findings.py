@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from awaf.findings import (
     classify_findings,
+    filter_by_pillars,
     finding_signature,
     fingerprint,
     normalize_title,
 )
+
+
+def test_filter_by_pillars_scopes_lifecycle() -> None:
+    findings = [
+        {"pillar": "Security", "title": "a"},
+        {"pillar": "Performance", "title": "b"},
+        {"pillar": "Security", "title": "c"},
+    ]
+    kept = filter_by_pillars(findings, {"Security"})
+    assert [f["title"] for f in kept] == ["a", "c"]
+    assert filter_by_pillars(findings, set()) == []
 
 
 def test_normalize_collapses_order_and_stopwords() -> None:
@@ -21,6 +33,13 @@ def test_fingerprint_stable_and_sensitive() -> None:
     assert len(a) == 12
     assert fingerprint("Security", "x") != fingerprint("Reliability", "x")
     assert fingerprint("Security", "x", "a.py") != fingerprint("Security", "x", "b.py")
+
+
+def test_fingerprint_normalizes_path_separators() -> None:
+    # Backslash vs forward-slash spelling of the same file must not churn identity.
+    assert fingerprint("Security", "x", "awaf\\cli.py") == fingerprint(
+        "Security", "x", "awaf/cli.py"
+    )
 
 
 def test_finding_signature_prefers_fingerprint() -> None:
