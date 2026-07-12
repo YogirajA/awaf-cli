@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json as _json
 from datetime import datetime
 from typing import Any
 
 from awaf import report_html as rh
 from awaf.db import AssessmentRecord
+from awaf.findings import LifecycleResult, finding_signature
 
 
 def test_esc_escapes_markup_and_quotes() -> None:
@@ -125,3 +127,70 @@ def test_footer_shows_tokens_and_cost() -> None:
     assert "1,234" in out
     assert "567" in out
     assert "$0.0189" in out
+
+
+def test_render_html_is_a_valid_document() -> None:
+    out = rh.render_html(_rec(overall_score=72.0), None, project_name="demo")
+    assert out.lstrip().lower().startswith("<!doctype html")
+    assert "</html>" in out
+    assert "72" in out
+    assert "Near Ready" in out
+    assert "demo" in out
+
+
+def test_action_items_render_detail_location_and_high_highlight() -> None:
+    findings = [
+        {
+            "severity": "High",
+            "pillar": "Security",
+            "detail": "no rate limit",
+            "file": "auth.py",
+            "line": 52,
+        },
+        {"severity": "Low", "pillar": "Performance", "detail": "slow path"},
+    ]
+    out = rh._render_action_items(findings, None)
+    assert "no rate limit" in out
+    assert "auth.py:52" in out
+    assert "border-left-color:#c4407e" in out  # High highlight border
+
+
+def test_action_items_escape_model_text() -> None:
+    findings = [{"severity": "High", "pillar": "X", "detail": "<script>alert(1)</script> & <b>"}]
+    out = rh._render_action_items(findings, None)
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+    assert "&amp;" in out
+
+
+def test_action_items_lifecycle_tags() -> None:
+    finding = {"severity": "High", "pillar": "X", "detail": "d", "fingerprint": "fp1"}
+    life = LifecycleResult(statuses={finding_signature(finding): "new"})
+    with_life = rh._render_action_items([finding], life)
+    assert "new" in with_life.lower()
+    without = rh._render_action_items([finding], None)
+    assert 'class="tag"' not in without
+
+
+def test_empty_sections_render_placeholders_without_crashing() -> None:
+    out = rh.render_html(_rec(), None, project_name="demo")
+    # findings/recs/evidence/improvements default to "[]"
+    assert "No action items recorded." in out
+    assert "No recommendations recorded." in out
+    assert "None recorded." in out
+
+
+def test_render_html_handles_populated_blobs() -> None:
+    rec = _rec(
+        findings=_json.dumps([{"severity": "Medium", "pillar": "Cost Optim.", "detail": "no cap"}]),
+        recommendations=_json.dumps([{"pillar": "Security", "detail": "add auth"}]),
+        evidence_reviewed=_json.dumps(["README.md", "agent.py"]),
+        evidence_gaps=_json.dumps(["no eval report"]),
+        improve_suggestions=_json.dumps(["provide eval reports"]),
+    )
+    out = rh.render_html(rec, None, project_name="demo")
+    assert "no cap" in out
+    assert "add auth" in out
+    assert "README.md" in out
+    assert "no eval report" in out
+    assert "provide eval reports" in out
