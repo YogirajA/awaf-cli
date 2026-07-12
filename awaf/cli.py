@@ -1533,7 +1533,7 @@ def compare(id1: int, id2: int) -> None:
     "--format",
     "fmt",
     default="compact",
-    type=click.Choice(["compact", "full", "json"]),
+    type=click.Choice(["compact", "full", "json", "html"]),
     show_default=True,
     help="Output format.",
 )
@@ -1572,6 +1572,28 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
         data = asdict(rec)
         data["created_at"] = rec.created_at.isoformat()
         click.echo(_json.dumps(data, indent=2))
+        return
+
+    if fmt == "html":
+        from awaf.db import get_recent_assessments as _get_recent
+        from awaf.findings import LifecycleResult, classify_findings
+        from awaf.report_html import render_html
+
+        try:
+            _cur_findings = _json.loads(rec.findings)
+            if not isinstance(_cur_findings, list):
+                _cur_findings = []
+        except (ValueError, TypeError):
+            _cur_findings = []
+        _prev = _get_recent(rec.project_name or project_name, limit=2)
+        life: LifecycleResult | None = None
+        if len(_prev) >= 2 and _prev[0].id == rec.id:
+            try:
+                _prev_findings_html = _json.loads(_prev[1].findings)
+            except (ValueError, TypeError):
+                _prev_findings_html = []
+            life = classify_findings(_cur_findings, _prev_findings_html)
+        click.echo(render_html(rec, life, project_name=project_name))
         return
 
     click.echo(f"\nAWAF Assessment: {rec.project_name or project_name}")
