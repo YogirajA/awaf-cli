@@ -187,3 +187,20 @@ def test_forwards_prompts_and_artifact_to_provider(monkeypatch: pytest.MonkeyPat
 
     assert result is _SUCCESS
     assert captured["args"] == ("SYS", "USER", "ART")
+
+
+def test_retry_log_denominator_counts_all_attempts(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # max_retries=2 means 3 total attempts, so the warning denominator is
+    # max_retries + 1: "attempt 1/3", "2/3" (not "1/2", "2/2").
+    _record_sleeps(monkeypatch)
+    provider = _ScriptedProvider([_timeout(), _timeout(), _SUCCESS])
+
+    with caplog.at_level("WARNING", logger="awaf.retry"):
+        retry.with_retry(provider, "sys", "user", max_retries=2)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 2
+    assert "attempt 1/3" in warnings[0]
+    assert "attempt 2/3" in warnings[1]

@@ -48,9 +48,10 @@ def validate_pillar_result(result: PillarResult, max_output_tokens: int) -> Pill
             f" of max ({max_output_tokens}) — response may be truncated"
         )
 
-    # Rule 2: known pathological scores
-    if int(result.score) in SUSPECT_SCORES:
-        reasons.append(f"score {int(result.score)} matches known model pathology pattern")
+    # Rule 2: known pathological scores (round to nearest int; scores are whole numbers,
+    # and rounding avoids int() truncating e.g. 41.6 down to 41 or 42.9 down to 42)
+    if round(result.score) in SUSPECT_SCORES:
+        reasons.append(f"score {round(result.score)} matches known model pathology pattern")
 
     # Rule 3: verified confidence + score 0 + empty findings (contradiction)
     if result.confidence == "verified" and result.score == 0 and not result.findings:
@@ -77,7 +78,7 @@ def validate_assessment_cluster(results: list[PillarResult]) -> list[str]:
         return warnings
 
     # Rule: ≥N pillars share the same integer score
-    score_counts: Counter[int] = Counter(int(r.score) for r in scored)
+    score_counts: Counter[int] = Counter(round(r.score) for r in scored)
     for score_val, count in score_counts.items():
         if count >= _CLUSTER_MIN_COUNT:
             if score_val == 100:
@@ -93,7 +94,7 @@ def validate_assessment_cluster(results: list[PillarResult]) -> list[str]:
                 cluster_reason = f"score {score_val} shared by {count} pillars (cluster pattern)"
             warnings.append(msg)
             for r in scored:
-                if int(r.score) == score_val:
+                if round(r.score) == score_val:
                     if not r.suspect:
                         r.suspect = True
                         r.suspect_reason = cluster_reason

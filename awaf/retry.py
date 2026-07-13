@@ -54,7 +54,7 @@ def with_retry(
             logger.warning(
                 "Provider call failed (attempt %d/%d, %s). Retrying in %.0fs.",
                 attempt + 1,
-                max_retries,
+                max_retries + 1,
                 type(exc).__name__,
                 sleep_time,
             )

@@ -159,6 +159,25 @@ def test_custom_api_key_env_name_from_toml(tmp_path, monkeypatch) -> None:  # ty
     assert cfg.api_key == "custom-secret"
 
 
+def test_literal_api_key_from_toml(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # A literal api_key in awaf.toml is honored; the provider error messages advertise it.
+    toml_path = _write_toml(tmp_path, '[provider]\nname = "anthropic"\napi_key = "sk-in-toml"\n')
+
+    cfg = resolve_provider_config(toml_path=toml_path)
+
+    assert cfg.api_key == "sk-in-toml"
+
+
+def test_env_api_key_wins_over_toml_literal(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Env keeps precedence over toml, so an env key beats a literal api_key in toml.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
+    toml_path = _write_toml(tmp_path, '[provider]\nname = "anthropic"\napi_key = "sk-in-toml"\n')
+
+    cfg = resolve_provider_config(toml_path=toml_path)
+
+    assert cfg.api_key == "sk-from-env"
+
+
 def test_toml_optional_params_applied(tmp_path) -> None:  # type: ignore[no-untyped-def]
     toml_path = _write_toml(tmp_path, _FULL_PROVIDER_TOML)
 

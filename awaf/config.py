@@ -110,10 +110,13 @@ def resolve_provider_config(
 
     # --- api key ---
     # awaf.toml can specify a custom env var name via api_key_env
+    # Priority: env var (via api_key_env or the provider default) > literal api_key in toml.
     api_key_env_name: str = toml_provider.get("api_key_env", "") or _API_KEY_ENV.get(
         provider_name, ""
     )
-    api_key: str = os.environ.get(api_key_env_name, "") if api_key_env_name else ""
+    api_key: str = (
+        os.environ.get(api_key_env_name, "") if api_key_env_name else ""
+    ) or toml_provider.get("api_key", "")
 
     # --- optional params ---
     max_tokens: int = int(toml_provider.get("max_tokens", 4096))

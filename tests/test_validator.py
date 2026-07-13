@@ -114,12 +114,13 @@ def test_pillar_result_non_pathological_score_does_not_fire() -> None:
     assert out.suspect_reason == ""
 
 
-def test_pillar_result_pathological_check_uses_int_truncation() -> None:
-    # int(42.9) == 42, so a fractional score in [42, 43) also matches the pattern.
-    r = _pr(42.9)
-    out = validate_pillar_result(r, max_output_tokens=1000)
-    assert out.suspect is True
-    assert "pathology" in out.suspect_reason
+def test_pillar_result_pathological_check_rounds_score() -> None:
+    # Score rounds to the nearest int: 41.6 -> 42 (flagged), 42.6 -> 43 (clean).
+    flagged = validate_pillar_result(_pr(41.6), max_output_tokens=1000)
+    assert flagged.suspect is True
+    assert "pathology" in flagged.suspect_reason
+    clean = validate_pillar_result(_pr(42.6), max_output_tokens=1000)
+    assert clean.suspect is False
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +249,9 @@ def test_cluster_only_the_shared_score_pillars_are_flagged() -> None:
     assert other.suspect_reason == ""
 
 
-def test_cluster_uses_int_truncation_of_float_scores() -> None:
-    # int(50.1) == int(50.9) == int(50.5) == 50, so fractional scores cluster together.
-    results = [_pr(50.1), _pr(50.9), _pr(50.5)]
+def test_cluster_rounds_float_scores() -> None:
+    # Scores round to the nearest int before clustering: 49.6, 50.0, 50.4 all -> 50.
+    results = [_pr(49.6), _pr(50.0), _pr(50.4)]
     warnings = validate_assessment_cluster(results)
     assert len(warnings) == 1
     assert "score 50" in warnings[0]
