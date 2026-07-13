@@ -343,14 +343,17 @@ on:
 jobs:
   awaf:
     runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # the CLI reads the key from env
     steps:
       - uses: actions/checkout@v4
       - uses: YogirajA/awaf-action@v1
         with:
           provider: anthropic                    # anthropic | openai | azure | google | litellm
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           # model: claude-haiku-4-5-20251001     # optional; omit to use the provider default
 ```
+
+You can equivalently pass the key as an action input (`anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`); an empty input never overwrites a key already in the environment.
 
 Prefer to run the CLI directly (custom runners, or without the action)? Install `awaf` and run `awaf run --ci` yourself, exactly as in the GitLab example below.
 
