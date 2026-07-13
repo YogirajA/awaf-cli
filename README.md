@@ -329,11 +329,12 @@ To measure mean and σ across several models in one pass (for example, over the 
 
 ### GitHub Actions
 
+The [AWAF Assessment action](https://github.com/YogirajA/awaf-action) installs the CLI and runs `awaf run --ci`. Gates (`overall_fail`, `tier2_fail`, `warn_only`) live in a committed `awaf.toml`; the job fails on a threshold breach or a band drop, and is skipped (exit 3) when no agent-relevant files changed.
+
 ```yaml
 name: AWAF Assessment
-# Recommended: run on a schedule, not on every commit.
-# Each run makes 10 LLM calls. Architecture changes slowly;
-# nightly or weekly is usually the right cadence.
+# Architecture changes slowly and each run makes ~10 LLM calls, so a weekly
+# schedule or on-demand run is usually the right cadence, not every commit.
 on:
   schedule:
     - cron: '0 6 * * 1'   # every Monday at 06:00 UTC
@@ -344,22 +345,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: YogirajA/awaf-action@v1
         with:
-          python-version: "3.12"
-      - run: pip install awaf
-      # Gates (overall_fail, tier2_fail, warn_only) live in a committed awaf.toml.
-      # `awaf run --ci` exits 1 on a threshold breach or a band drop, and exits 3
-      # (neutral) when no agent-relevant files changed.
-      - run: awaf run --ci --paths .
-        env:
-          # Use whichever provider key you have
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          AWAF_PROVIDER: anthropic               # anthropic | openai | azure | google | litellm
-          AWAF_MODEL: claude-haiku-4-5-20251001  # optional; omit to use the provider default
+          provider: anthropic                    # anthropic | openai | azure | google | litellm
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # model: claude-haiku-4-5-20251001     # optional; omit to use the provider default
 ```
+
+Prefer to run the CLI directly (custom runners, or without the action)? Install `awaf` and run `awaf run --ci` yourself, exactly as in the GitLab example below.
 
 **Recommended cadence:** weekly schedule or on-demand before releases. Running on every PR makes sense only for teams actively refactoring agent architecture. For most teams, weekly is sufficient -- architecture changes slowly.
 
