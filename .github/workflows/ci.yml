@@ -39,4 +39,6 @@ jobs:
         run: uv run mypy awaf/
 
       - name: Unit tests
-        run: uv run pytest tests/ -m "not integration" -x -q
+        # Coverage floor is a ratchet: currently ~75%, gated at 70% to block
+        # regressions without flaking. Raise the floor as coverage climbs.
+        run: uv run pytest tests/ -m "not integration" -x -q --cov=awaf --cov-report=term-missing --cov-fail-under=70
