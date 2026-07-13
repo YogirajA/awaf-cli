@@ -3,8 +3,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Canonical readiness bands (lower_bound, label), highest-first.
-# Single source of truth; cli._READINESS must equal this (locked by test_band_consistency).
+# The one spec-version banner string. Bump here for a v1.x release; every emitter (run,
+# report, artifact, pillar prompts, HTML) and this module's banner check import it.
+SPEC_VERSION = "AWAF v1.4"
+
+# Canonical readiness bands (lower_bound, label), highest-first. Single source of truth,
+# imported by cli and report_html (dependency-free home so neither creates an import cycle).
 READINESS_BANDS: list[tuple[int, str]] = [
     (85, "Production Ready"),
     (70, "Near Ready"),
@@ -12,6 +16,29 @@ READINESS_BANDS: list[tuple[int, str]] = [
     (25, "High Risk"),
     (0, "Not Ready"),
 ]
+
+# One-line description shown under an overall score, keyed by band label.
+READINESS_BLURBS: dict[str, str] = {
+    "Production Ready": "Fully ready. Variance within this band is noise.",
+    "Near Ready": "Close to production. Address findings before deploying.",
+    "Needs Work": "Notable gaps. Resolve High findings before production use.",
+    "High Risk": "Significant control failures. Not suitable for production.",
+    "Not Ready": "Critical gaps across multiple pillars. Major rework required.",
+}
+
+
+def band_label(score: float) -> str:
+    """Readiness band label for a numeric overall score."""
+    for lower, label in READINESS_BANDS:
+        if score >= lower:
+            return label
+    return READINESS_BANDS[-1][1]
+
+
+def band_blurb(label: str) -> str:
+    """One-line description for a band label ('' if unknown)."""
+    return READINESS_BLURBS.get(label, "")
+
 
 # Each pillar's accepted surface forms: CLI-abbreviated first, then full spec name.
 PILLAR_ALIASES: list[tuple[str, ...]] = [
@@ -37,14 +64,7 @@ class CheckResult:
     detail: str = ""
 
 
-def _expected_label(score: int) -> str:
-    for lower, label in READINESS_BANDS:
-        if score >= lower:
-            return label
-    return "Not Ready"
-
-
-def has_banner_version(text: str, expected: str = "AWAF v1.4") -> CheckResult:
+def has_banner_version(text: str, expected: str = SPEC_VERSION) -> CheckResult:
     ok = expected in text
     return CheckResult(ok, "" if ok else f"missing banner '{expected}'")
 
@@ -66,7 +86,7 @@ def label_matches_score(text: str) -> CheckResult:
         if len(present) == 1 and m:
             score = int(m.group(1))
             if 0 <= score <= 100:
-                expected = _expected_label(score)
+                expected = band_label(score)
                 if present[0] != expected:
                     return CheckResult(
                         False, f"score {score} labelled '{present[0]}', expected '{expected}'"

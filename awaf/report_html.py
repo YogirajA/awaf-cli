@@ -6,17 +6,7 @@ from typing import Any
 
 from awaf.db import AssessmentRecord
 from awaf.findings import LifecycleResult, finding_signature
-from awaf.reportcheck import READINESS_BANDS
-
-# --- theme: copy shown under the overall score, keyed by band label ---------
-
-_BAND_BLURB: dict[str, str] = {
-    "Production Ready": "Fully ready. Variance within this band is noise.",
-    "Near Ready": "Close to production. Address findings before deploying.",
-    "Needs Work": "Notable gaps. Resolve High findings before production use.",
-    "High Risk": "Significant control failures. Not suitable for production.",
-    "Not Ready": "Critical gaps across multiple pillars. Major rework required.",
-}
+from awaf.reportcheck import READINESS_BANDS, SPEC_VERSION, band_blurb
 
 # (display_name, score_attr, conf_attr, tier, accent_hex)
 # tier: 0 Foundation, 1 Cloud-WAF adapted, 2 Agent-native (1.5x weight).
@@ -171,9 +161,9 @@ def _band_for(score: float) -> tuple[str, str]:
     """Return (band_label, one_line_blurb) for a numeric overall score."""
     for lower, label in READINESS_BANDS:
         if score >= lower:
-            return label, _BAND_BLURB.get(label, "")
+            return label, band_blurb(label)
     label = READINESS_BANDS[-1][1]
-    return label, _BAND_BLURB.get(label, "")
+    return label, band_blurb(label)
 
 
 def _severity_bucket(severity: str) -> str:
@@ -211,7 +201,7 @@ def _render_masthead(rec: AssessmentRecord, project_name: str) -> str:
         '<header class="masthead">'
         '<div class="glow-a"></div><div class="glow-b"></div>'
         '<div class="inner">'
-        '<div class="eyebrow">AWAF v1.4 · Assessment</div>'
+        f'<div class="eyebrow">{SPEC_VERSION} · Assessment</div>'
         f"<h1>{name}</h1>"
         f'<div class="meta">{date} · {provider_model}</div>'
         '<div class="scoreline">'
@@ -299,12 +289,10 @@ def _render_action_items(findings: list[Any], life: LifecycleResult | None) -> s
     if not dicts:
         return header + '<div class="muted-line">No action items recorded.</div></section>'
 
-    def _key(f: dict[str, Any]) -> int:
-        return _SEVERITY_ORDER[_severity_bucket(str(f.get("severity") or ""))]
-
+    # Pair each finding with its severity bucket once, then sort on the bucket's rank.
+    with_bucket = [(f, _severity_bucket(str(f.get("severity") or ""))) for f in dicts]
     rows: list[str] = []
-    for f in sorted(dicts, key=_key):
-        bucket = _severity_bucket(str(f.get("severity") or ""))
+    for f, bucket in sorted(with_bucket, key=lambda pair: _SEVERITY_ORDER[pair[1]]):
         border, tint, sev_col = _SEVERITY_STYLE[bucket]
         severity_txt = _esc(f.get("severity") or bucket)
         pillar = _esc(f.get("pillar") or "")

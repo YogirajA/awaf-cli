@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import types
-
 import pytest
 
 from awaf import reportcheck as rc
@@ -54,7 +52,6 @@ def test_pillar_table_foundation_pass_and_fail() -> None:
 
 def test_write_artifact_passes_all_shape_checks(tmp_path) -> None:  # type: ignore[no-untyped-def]
     path = str(tmp_path / "report.txt")
-    ingest = types.SimpleNamespace(files_scanned=["a.py"], files_skipped=[])
     findings = [
         {"severity": "Critical", "pillar": "Security", "detail": "no auth"},
         {"severity": "High", "pillar": "Cost Optim.", "detail": "no budget cap"},
@@ -68,7 +65,8 @@ def test_write_artifact_passes_all_shape_checks(tmp_path) -> None:  # type: igno
         "demo",
         "2026-07-10",
         _make_assessment(),
-        ingest,
+        ["a.py"],
+        [],
         findings,
         recs,
         gaps,

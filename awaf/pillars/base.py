@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from json_repair import repair_json
-
 from awaf.findings import fingerprint as _fingerprint
 from awaf.graph import validate_anchor
+from awaf.jsonparse import lenient_json_object
 from awaf.providers.base import LLMProvider
+from awaf.reportcheck import SPEC_VERSION
 from awaf.retry import with_retry
 
 logger = logging.getLogger(__name__)
@@ -228,36 +227,16 @@ class PillarAgent(ABC):
 
     def _parse_response(self, raw: str, files_by_len: dict[str, int] | None = None) -> PillarResult:
         """Parse the LLM's JSON response into a PillarResult."""
-        try:
-            # Strip accidental markdown fences
-            text = raw.strip()
-            if text.startswith("```"):
-                lines = text.splitlines()
-                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            # Extract outermost JSON object -- tolerates leading/trailing prose
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start != -1 and end > start:
-                text = text[start:end]
-            # Try strict parse first; fall back to repair for malformed LLM output
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError:
-                repaired = repair_json(text, return_objects=True)
-                if not isinstance(repaired, dict):
-                    raise ValueError(  # noqa: TRY301
-                        f"repair_json returned {type(repaired).__name__}, expected dict"
-                    ) from None
-                data = repaired
-        except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning("Pillar '%s' returned unparseable JSON: %s", self.name, exc)
+        data = lenient_json_object(raw)
+        if data is None:
+            logger.warning("Pillar '%s' returned unparseable JSON.", self.name)
             return PillarResult(
                 name=self.name,
                 score=0.0,
                 confidence="self_reported",
                 findings=[
                     self._structure_finding(
-                        {"severity": "High", "detail": f"LLM response could not be parsed: {exc}"},
+                        {"severity": "High", "detail": "LLM response could not be parsed"},
                         files_by_len,
                     )
                 ],
@@ -302,7 +281,7 @@ class PillarAgent(ABC):
         )
         return (
             f"You are an expert AI systems architect evaluating production readiness.\n"
-            f"Assess the provided artifacts against the AWAF v1.4 **{pillar_name}** pillar.\n\n"
+            f"Assess the provided artifacts against the {SPEC_VERSION} **{pillar_name}** pillar.\n\n"
             f"## What to Assess\n{what_to_assess}\n\n"
             f"## Evidence Sources\n{evidence_sources}\n{_EVIDENCE_NOTE}\n\n"
             f"{_SCORING_GUIDE}\n"

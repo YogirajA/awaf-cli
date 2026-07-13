@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from awaf.cli import _READINESS
 from awaf.reportcheck import READINESS_BANDS
 
 _CANONICAL = {label: lower for lower, label in READINESS_BANDS}
@@ -42,10 +41,6 @@ def _bands_from_text(text: str) -> dict[str, int]:
         if m:
             out.setdefault(present[0], min(int(m.group(1)), int(m.group(2))))
     return out
-
-
-def test_reportcheck_bands_match_cli() -> None:
-    assert list(READINESS_BANDS) == list(_READINESS)
 
 
 @pytest.mark.parametrize("path", _LOCAL, ids=lambda p: str(p))

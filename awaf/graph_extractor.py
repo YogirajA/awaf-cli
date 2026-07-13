@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from collections.abc import Callable
-from typing import Any
-
-from json_repair import repair_json
 
 from awaf.graph import (
     ArchitectureGraph,
@@ -16,6 +12,7 @@ from awaf.graph import (
     load_cached_graph,
     store_graph,
 )
+from awaf.jsonparse import lenient_json_object
 from awaf.providers.base import LLMProvider
 from awaf.retry import with_retry
 
@@ -46,21 +43,6 @@ Rules:
 """
 
 _USER_PROMPT = "Extract the agent-architecture graph from the provided artifacts as JSON."
-
-
-def _loads_lenient(raw: str) -> dict[str, Any] | None:
-    text = raw.strip()
-    if text.startswith("```"):
-        rows = text.splitlines()
-        text = "\n".join(rows[1:-1] if rows[-1].strip() == "```" else rows[1:])
-    start, end = text.find("{"), text.rfind("}") + 1
-    if start != -1 and end > start:
-        text = text[start:end]
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        data = repair_json(text, return_objects=True)
-    return data if isinstance(data, dict) else None
 
 
 def _pack(
@@ -119,7 +101,7 @@ def extract_graph(
             payload,
             max_retries=provider.config.max_retries,
         )
-        data = _loads_lenient(resp.content)
+        data = lenient_json_object(resp.content)
         if data is None:
             logger.warning("Graph extraction returned unparseable JSON; falling back to raw dump.")
             return None

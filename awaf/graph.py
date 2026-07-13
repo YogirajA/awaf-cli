@@ -178,6 +178,30 @@ def finalize_graph(
     return graph
 
 
+# Canonical vocabularies (mirror the enums the extractor prompt asks the model to use).
+# The per-pillar maps below select over these; a map referencing a token outside the
+# vocabulary would silently match nothing, so the maps are validated against these at import.
+NODE_TYPES: frozenset[str] = frozenset(
+    {"agent", "tool", "data_store", "context_source", "guardrail", "external"}
+)
+FILE_ROLES: frozenset[str] = frozenset(
+    {
+        "agent",
+        "tool",
+        "orchestration",
+        "config",
+        "ops",
+        "observability",
+        "security",
+        "cost",
+        "data",
+        "test",
+        "docs",
+        "other",
+    }
+)
+
+
 NODE_TYPES_BY_PILLAR: dict[str, set[str]] = {
     "Foundation": {"agent", "tool", "data_store", "external"},
     "Op. Excellence": {"guardrail"},
@@ -203,6 +227,21 @@ FILE_ROLES_BY_PILLAR: dict[str, set[str]] = {
     "Controllability": {"agent", "tool", "orchestration"},
     "Context Integrity": {"agent", "data", "config"},
 }
+
+
+def _validate_pillar_maps() -> None:
+    """Fail loudly at import if a per-pillar map references a token outside the canonical
+    vocabulary (e.g. a typo like 'observabilty' that would silently select zero slices)."""
+    unknown_types = {t for types in NODE_TYPES_BY_PILLAR.values() for t in types} - NODE_TYPES
+    unknown_roles = {r for roles in FILE_ROLES_BY_PILLAR.values() for r in roles} - FILE_ROLES
+    if unknown_types or unknown_roles:
+        raise ValueError(
+            f"graph pillar maps reference unknown tokens: node types {unknown_types}, "
+            f"file roles {unknown_roles}"
+        )
+
+
+_validate_pillar_maps()
 
 
 @dataclass

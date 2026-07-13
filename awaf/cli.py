@@ -12,7 +12,14 @@ from typing import Any
 
 import click
 
+from awaf import reportcheck
 from awaf.config import resolve_ci_config, resolve_graph_config, resolve_provider_config
+from awaf.findings import (
+    LifecycleResult,
+    classify_findings,
+    filter_by_pillars,
+    finding_signature,
+)
 from awaf.graph import graph_to_json
 from awaf.graph_extractor import get_graph
 from awaf.providers import get_provider
@@ -46,23 +53,6 @@ _PROVIDER_TABLE: list[tuple[str, str, str]] = [
     ("google", "gemini-2.0-flash", "GOOGLE_API_KEY"),
     ("litellm", "", ""),
 ]
-
-_READINESS: list[tuple[int, str]] = [
-    (85, "Production Ready"),
-    (70, "Near Ready"),
-    (50, "Needs Work"),
-    (25, "High Risk"),
-    (0, "Not Ready"),
-]
-
-_READINESS_DESCRIPTIONS: dict[str, str] = {
-    "Production Ready": "Fully ready. Variance within this band is noise.",
-    "Near Ready": "Close to production. Address findings before deploying.",
-    "Needs Work": "Notable gaps. Resolve High findings before production use.",
-    "High Risk": "Significant control failures. Not suitable for production.",
-    "Not Ready": "Critical gaps across multiple pillars. Major rework required.",
-}
-
 
 _TIER1_PILLAR_NAMES: frozenset[str] = frozenset(
     {"Op. Excellence", "Security", "Reliability", "Performance", "Cost Optim.", "Sustainability"}
@@ -118,15 +108,33 @@ def _evaluated_pillars(rec: object) -> set[str]:
     }
 
 
+def _comparable_lifecycle(
+    current_findings: list[dict[str, Any]],
+    current_pillars: set[str],
+    prev_rec: object | None,
+) -> LifecycleResult | None:
+    """Lifecycle diff of *current_findings* against *prev_rec*'s findings, scoped to the
+    pillars both runs evaluated. Returns None when there is no previous record.
+
+    One home for the pairing + comparable-pillar + shape-guarded classify logic that run,
+    compare, and report otherwise each spelled out identically.
+    """
+    if prev_rec is None:
+        return None
+    comparable = current_pillars & _evaluated_pillars(prev_rec)
+    prev_findings = _load_findings_list(getattr(prev_rec, "findings", "[]"))
+    return classify_findings(
+        filter_by_pillars(current_findings, comparable),
+        filter_by_pillars(prev_findings, comparable),
+    )
+
+
 def _readiness_label(score: float) -> str:
-    for threshold, label in _READINESS:
-        if score >= threshold:
-            return label
-    return "Not Ready"
+    return reportcheck.band_label(score)
 
 
 def _readiness_description(score: float) -> str:
-    return _READINESS_DESCRIPTIONS.get(_readiness_label(score), "")
+    return reportcheck.band_blurb(reportcheck.band_label(score))
 
 
 def _pillar_scores(assessments: list[Any], pillar_index: int) -> list[float]:
@@ -875,7 +883,9 @@ def run(
     _desc = _readiness_description(assessment.overall_score)
     click.echo(_BANNER)
     click.echo(f"AWAF Assessment: {project_name}")
-    click.echo(f"AWAF v1.4  |  {_today()}  |  {config.provider_name} / {effective_model}")
+    click.echo(
+        f"{reportcheck.SPEC_VERSION}  |  {_today()}  |  {config.provider_name} / {effective_model}"
+    )
     click.echo(_SEP)
     click.echo(f"  Overall Score    {int(assessment.overall_score)}/100   {_label}")
     click.echo(f"  {_desc}")
@@ -903,13 +913,15 @@ def run(
     # have truncated). Reporting ingest_result here in graph mode would misdescribe coverage.
     if graph_active:
         analyzed_files = sorted(scanned_files_map.keys())
+        skipped_files: list[str] = []
         click.echo(f"  FILES ANALYZED     {len(analyzed_files)} files  (code-graph evidence)")
     else:
         analyzed_files = list(ingest_result.files_scanned)
+        skipped_files = list(ingest_result.files_skipped)
         click.echo(f"  FILES ANALYZED     {len(analyzed_files)} files")
-        if ingest_result.files_skipped:
-            click.echo(f"  FILES NOT SCANNED  {len(ingest_result.files_skipped)} files")
-            for s in ingest_result.files_skipped[:5]:
+        if skipped_files:
+            click.echo(f"  FILES NOT SCANNED  {len(skipped_files)} files")
+            for s in skipped_files[:5]:
                 click.echo(f"    {s}")
     if assessment.budget_exceeded:
         click.echo("  WARNING: session budget exceeded; some pillars skipped")
@@ -960,19 +972,17 @@ def run(
     # Lifecycle vs the previous run, loaded BEFORE this run's rows are saved,
     # so _prev_records[0] is the genuine previous run.
     from awaf.db import get_recent_assessments
-    from awaf.findings import classify_findings, filter_by_pillars, finding_signature
 
     _prev_records = get_recent_assessments(project_name, limit=1)
-    _previous_findings = _load_findings_list(_prev_records[0].findings) if _prev_records else []
-    # Diff only pillars this run and the previous run BOTH evaluated. Without this a
-    # `--pillar security` run compared against a full run reports every other pillar as
-    # resolved, and the pillar-only row then poisons the next full run's diff.
+    # Diff only pillars this run and the previous run BOTH evaluated (see _comparable_lifecycle):
+    # without it a `--pillar security` run diffed against a full run reports every other pillar
+    # as resolved, and the pillar-only row then poisons the next full run's diff.
     _current_pillars = {r.name for r in assessment.pillar_results if not r.skipped}
-    _prev_pillars = _evaluated_pillars(_prev_records[0]) if _prev_records else set()
-    _comparable = _current_pillars & _prev_pillars
-    lifecycle = classify_findings(
-        filter_by_pillars(all_findings, _comparable),
-        filter_by_pillars(_previous_findings, _comparable),
+    lifecycle = (
+        _comparable_lifecycle(
+            all_findings, _current_pillars, _prev_records[0] if _prev_records else None
+        )
+        or LifecycleResult()
     )
     if all_findings and _prev_records:
         n, rec_, res = lifecycle.counts
@@ -1068,7 +1078,8 @@ def run(
             project_name=project_name,
             date=_today(),
             assessment=assessment,
-            ingest_result=ingest_result,
+            files_analyzed=analyzed_files,
+            files_skipped=skipped_files,
             all_findings=all_findings,
             all_recs=all_recs,
             all_gaps=all_gaps,
@@ -1607,15 +1618,12 @@ def compare(id1: int, id2: int) -> None:
     click.echo(f"  #{id1}: {rec1.provider}/{rec1.model}  {rec1.created_at.strftime('%Y-%m-%d')}")
     click.echo(f"  #{id2}: {rec2.provider}/{rec2.model}  {rec2.created_at.strftime('%Y-%m-%d')}")
 
-    from awaf.findings import classify_findings, filter_by_pillars
-
-    # Scope the diff to pillars evaluated in BOTH assessments so comparing a single-pillar
-    # run against a full one does not falsely report the other pillars as resolved. Findings
-    # blobs are shape-guarded so a legacy/hand-edited row never crashes the diff.
-    _comparable = _evaluated_pillars(rec1) & _evaluated_pillars(rec2)
-    _cur = filter_by_pillars(_load_findings_list(rec2.findings), _comparable)
-    _prev = filter_by_pillars(_load_findings_list(rec1.findings), _comparable)
-    _life = classify_findings(_cur, _prev)
+    # Scope the diff to pillars evaluated in BOTH assessments (and shape-guard the blobs) so
+    # comparing a single-pillar run against a full one does not falsely report the rest resolved.
+    _life = (
+        _comparable_lifecycle(_load_findings_list(rec2.findings), _evaluated_pillars(rec2), rec1)
+        or LifecycleResult()
+    )
     _n, _rec, _res = _life.counts
     click.echo()
     click.echo(f"  Findings: {_n} new, {_rec} recurring, {_res} resolved (id{id1} -> id{id2})")
@@ -1682,21 +1690,18 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
 
     if fmt == "html":
         from awaf.db import get_recent_assessments as _get_recent
-        from awaf.findings import LifecycleResult, classify_findings, filter_by_pillars
         from awaf.report_html import render_html
 
-        _cur_findings = _load_findings_list(rec.findings)
         _prev = _get_recent(rec.project_name or project_name, limit=2)
-        life: LifecycleResult | None = None
-        if len(_prev) >= 2 and _prev[0].id == rec.id:
-            _cmp = _evaluated_pillars(rec) & _evaluated_pillars(_prev[1])
-            _prev_findings_html = filter_by_pillars(_load_findings_list(_prev[1].findings), _cmp)
-            life = classify_findings(filter_by_pillars(_cur_findings, _cmp), _prev_findings_html)
+        _prev_rec = _prev[1] if (len(_prev) >= 2 and _prev[0].id == rec.id) else None
+        life = _comparable_lifecycle(
+            _load_findings_list(rec.findings), _evaluated_pillars(rec), _prev_rec
+        )
         click.echo(render_html(rec, life, project_name=project_name))
         return
 
     click.echo(f"\nAWAF Assessment: {rec.project_name or project_name}")
-    click.echo(f"AWAF v1.4  |  {rec.created_at.strftime('%Y-%m-%d')}")
+    click.echo(f"{reportcheck.SPEC_VERSION}  |  {rec.created_at.strftime('%Y-%m-%d')}")
     click.echo(_SEP)
     click.echo(
         f"  Overall Score    {int(rec.overall_score)}  {_readiness_label(rec.overall_score)}"
@@ -1731,21 +1736,12 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
     improvements = _json.loads(rec.improve_suggestions)
 
     from awaf.db import get_recent_assessments as _get_recent
-    from awaf.findings import (
-        LifecycleResult,
-        classify_findings,
-        filter_by_pillars,
-        finding_signature,
-    )
 
+    # rec is the latest run; _prev[1] is the genuine prior run. _comparable_lifecycle scopes
+    # the diff to pillars evaluated in both so a prior single-pillar run cannot fabricate new/resolved.
     _prev = _get_recent(rec.project_name or project_name, limit=2)
-    _life: LifecycleResult | None = None
-    if len(_prev) >= 2 and _prev[0].id == rec.id:
-        # rec is the latest run; _prev[1] is the genuine prior run. Scope the diff to pillars
-        # evaluated in both, so a prior single-pillar run does not fabricate resolved/new.
-        _cmp = _evaluated_pillars(rec) & _evaluated_pillars(_prev[1])
-        _prev_findings = filter_by_pillars(_load_findings_list(_prev[1].findings), _cmp)
-        _life = classify_findings(filter_by_pillars(findings, _cmp), _prev_findings)
+    _prev_rec = _prev[1] if (len(_prev) >= 2 and _prev[0].id == rec.id) else None
+    _life = _comparable_lifecycle(findings, _evaluated_pillars(rec), _prev_rec)
 
     if evidence or fmt == "full":
         click.echo()
@@ -1854,7 +1850,8 @@ def _write_artifact(
     project_name: str,
     date: str,
     assessment: object,
-    ingest_result: object,
+    files_analyzed: list[str],
+    files_skipped: list[str],
     all_findings: list[dict],  # type: ignore[type-arg]
     all_recs: list[dict],  # type: ignore[type-arg]
     all_gaps: list[str],
@@ -1866,7 +1863,6 @@ def _write_artifact(
     """Write a plain-text artifact report to *path*."""
     import datetime
 
-    from awaf.findings import finding_signature
     from awaf.pillars import AssessmentResult
 
     def _asc(text: str) -> str:
@@ -1904,7 +1900,7 @@ def _write_artifact(
         a(banner_line)
     a("")
     a(f"AWAF Assessment: {project_name}")
-    a(f"AWAF v1.4 | {date} | {provider_name} / {effective_model}")
+    a(f"{reportcheck.SPEC_VERSION} | {date} | {provider_name} / {effective_model}")
     a(SEP_MAJOR)
     a("")
     a(f"Overall Score: {int(assessment.overall_score)}/100 -- {label}")
@@ -1973,10 +1969,8 @@ def _write_artifact(
     a("")
     a(SEP_MINOR)
 
-    # Files
-    files_scanned = getattr(ingest_result, "files_scanned", [])
-    files_skipped = getattr(ingest_result, "files_skipped", [])
-    a(f"FILES ANALYZED: {len(files_scanned)} files")
+    # Files (same coverage the console and DB report: graph file set in graph mode)
+    a(f"FILES ANALYZED: {len(files_analyzed)} files")
     if files_skipped:
         a(f"FILES NOT SCANNED: {len(files_skipped)} files")
         for s in files_skipped[:10]:

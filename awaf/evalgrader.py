@@ -5,9 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from json_repair import repair_json
-
 from awaf import reportcheck
+from awaf.jsonparse import lenient_json_object
 from awaf.providers.base import LLMProvider
 from awaf.retry import with_retry
 
@@ -117,16 +116,8 @@ def run_case(provider: LLMProvider, system_prompt: str, case: EvalCase) -> tuple
 
 
 def _parse_verdict(raw: str, expectation: str) -> Verdict:
-    text = raw.strip()
-    start, end = text.find("{"), text.rfind("}") + 1
-    if start != -1 and end > start:
-        text = text[start:end]
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        repaired = repair_json(text, return_objects=True)
-        data = repaired if isinstance(repaired, dict) else {}
-    if not isinstance(data, dict) or "passed" not in data:
+    data = lenient_json_object(raw)
+    if data is None or "passed" not in data:
         return Verdict(expectation, False, f"unparseable judge response: {raw[:80]!r}")
     passed = data.get("passed")
     if not isinstance(passed, bool):

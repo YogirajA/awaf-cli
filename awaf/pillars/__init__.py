@@ -223,14 +223,17 @@ def run_assessment(
         g: ArchitectureGraph = graph
         gcfg = graph_config or GraphConfig()
         files = scanned_files or {}
-        files_by_len = {p: len(c.splitlines()) for p, c in files.items()}
+        # Split each file's lines once (not once per pillar): read_lines is called for every
+        # anchor/role file by all 10 pillars, and files_by_len derives from the same split.
+        lines_by_path = {p: c.splitlines() for p, c in files.items()}
+        files_by_len = {p: len(lines) for p, lines in lines_by_path.items()}
         graph_block = render_graph_block(g)
         slice_budget = gcfg.slice_budget
         context_lines = gcfg.context_lines
         starvation_retry_enabled = gcfg.starvation_retry
 
         def read_lines(path: str) -> list[str]:
-            return files.get(path, "").splitlines()
+            return lines_by_path.get(path, [])
 
         def eval_fn(agent: PillarAgent) -> PillarResult:
             sr = select_slices(
