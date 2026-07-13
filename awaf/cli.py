@@ -374,6 +374,7 @@ def _load_dotenv(path: str = ".env") -> None:
 
 
 @click.group()
+@click.version_option(package_name="awaf")
 def cli() -> None:
     """awaf — Score AI agent architectures against the AWAF open specification."""
     _load_dotenv()
