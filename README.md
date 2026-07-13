@@ -325,6 +325,8 @@ awaf history
 
 If σ > 5, switch to a stronger model (`--model claude-sonnet-4-6`) — it shows significantly less variance than Haiku — or drop the absolute threshold and use regression detection only.
 
+To measure mean and σ across several models in one pass (for example, over the bundled `examples/good-agent` and `examples/bad-agent`), run the calibration harness `scripts/calibrate.py`. See [CALIBRATION.md](CALIBRATION.md) for how to run it and interpret the numbers.
+
 ### GitHub Actions
 
 ```yaml
