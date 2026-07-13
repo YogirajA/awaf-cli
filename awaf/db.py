@@ -3,9 +3,20 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
-from sqlalchemy import Column, DateTime, Engine, Float, Integer, String, Text, create_engine
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Engine,
+    Float,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    inspect,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Session
 
 _DEFAULT_DB_URL = "sqlite:///./awaf.db"
@@ -168,11 +179,58 @@ class AssessmentRecord:
 _engine: Engine | None = None
 
 
+def _column_default_sql(col: Any) -> str | None:
+    """Render a column's scalar default as SQL, or None (callable/no default)."""
+    default = col.default
+    if default is None or getattr(default, "is_callable", False):
+        return None
+    value = getattr(default, "arg", None)
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+    return None
+
+
+def _migrate_schema(engine: Engine) -> None:
+    """Additively add any model columns missing from an existing assessments table.
+
+    SQLite's create_all never alters an existing table, so a db written by an older
+    awaf (before provider/model/confidence/findings columns existed) would otherwise
+    raise 'no such column' on every read. This adds only missing columns; it never
+    drops or retypes, so it is safe to run on every open.
+    """
+    inspector = inspect(engine)
+    if "assessments" not in inspector.get_table_names():
+        return  # create_all already built the current schema
+    existing = {c["name"] for c in inspector.get_columns("assessments")}
+    dialect = engine.dialect
+    with engine.begin() as conn:
+        for col in _Assessment.__table__.columns:
+            if col.name in existing:
+                continue
+            ddl = f'ALTER TABLE assessments ADD COLUMN "{col.name}" {col.type.compile(dialect)}'
+            default_sql = _column_default_sql(col)
+            if default_sql is not None:
+                # NOT NULL columns need a default to backfill existing rows; SQLite
+                # rejects NOT NULL without one, so fall back to a plain default add.
+                ddl += (
+                    f" NOT NULL DEFAULT {default_sql}"
+                    if not col.nullable
+                    else f" DEFAULT {default_sql}"
+                )
+            conn.execute(text(ddl))
+
+
 def _init_engine() -> Engine:
     global _engine
     if _engine is None:
         _engine = create_engine(_db_url(), connect_args={"check_same_thread": False})
         _Base.metadata.create_all(_engine)
+        _migrate_schema(_engine)
     return _engine
 
 
