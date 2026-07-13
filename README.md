@@ -189,10 +189,11 @@ api_key_env = "OPENAI_API_KEY"   # defaults to provider standard env var
 # model = "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
 
 [thresholds]
-overall_fail = 60
-tier2_fail = 50
-regression_limit = 10
-warn_only = false
+overall_fail = 60      # fail if the overall score < 60
+tier2_fail = 50        # fail if the Tier 2 (Agent-Native) average < 50
+warn_only = false      # true = report breaches but never exit non-zero
+# Band-drop regression is automatic and needs no config: a run that falls into a
+# lower readiness band than the previous run for the same project fails the build.
 
 [files]
 # paths: controls what gets ingested. --paths CLI flag overrides this.
@@ -305,13 +306,13 @@ LLM assessments are non-deterministic even at `temperature=0.0`. Repeated runs o
 
 | Gate type | Valid? | Why |
 |-----------|--------|-----|
-| **Regression detection** (`score-regression-limit`) | ✅ Always | A real architectural regression is large (10–20+ pts). ±5 noise does not cross a 10-point limit. This is the safest gate for any team. |
+| **Band-drop regression** (automatic) | ✅ Always | A run that drops into a lower readiness band than the previous run fails the build. Real architectural regressions cross a band boundary; ±5 noise inside a band does not. The safest gate for any team, and it needs no configuration. |
 | **Foundation hard fail** (Foundation < 40) | ✅ Always | Threshold is large enough that noise cannot cause false failures. |
-| **Exit 3 when nothing changed** | ✅ Always | Binary file diff — no LLM involved. |
-| **Absolute threshold** (`fail-threshold`) | ⚠️ Only after baseline | If your stable score is 88 ± 6, a gate at 90 will fail randomly. Establish mean ± σ first (see below). |
+| **Exit 3 when nothing changed** | ✅ Always | Binary file diff, no LLM involved. |
+| **Absolute threshold** (`overall_fail` / `tier2_fail`) | ⚠️ Only after baseline | If your stable score is 88 ± 6, a gate at 90 will fail randomly. Establish mean ± σ first (see below). |
 | **Per-pillar gates** | ❌ No | Individual pillar variance is higher than overall variance. A 5-point per-pillar swing after an unrelated change is normal. |
 
-**Before setting `fail-threshold`, establish a baseline:**
+**Before setting `overall_fail`, establish a baseline:**
 
 ```bash
 # Run 5–10 times on the same codebase, then inspect variance
@@ -319,7 +320,7 @@ for i in {1..5}; do awaf run; done
 awaf history
 
 # mean=88, σ=2  → threshold of 85 is a reliable gate
-# mean=88, σ=12 → no absolute threshold is reliable; use score-regression-limit only
+# mean=88, σ=12 → no absolute threshold is reliable; rely on the automatic band-drop gate only
 ```
 
 If σ > 5, switch to a stronger model (`--model claude-sonnet-4-6`) — it shows significantly less variance than Haiku — or drop the absolute threshold and use regression detection only.
@@ -341,24 +342,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: YogirajA/awaf-action@v1
+      - uses: actions/setup-python@v5
         with:
+          python-version: "3.12"
+      - run: pip install awaf
+      # Gates (overall_fail, tier2_fail, warn_only) live in a committed awaf.toml.
+      # `awaf run --ci` exits 1 on a threshold breach or a band drop, and exits 3
+      # (neutral) when no agent-relevant files changed.
+      - run: awaf run --ci --paths .
+        env:
           # Use whichever provider key you have
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          # azure-openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          provider: anthropic           # anthropic | openai | azure | google | litellm
-          model: claude-haiku-4-5-20251001  # optional; omit to use provider default (Haiku)
-          project-name: my-agent
-          # score-regression-limit: safe to use immediately — catches real regressions
-          # regardless of run-to-run variance.
-          score-regression-limit: 10
-          # fail-threshold: only set this after running 5–10 baselines and confirming
-          # your σ < 5. Set the threshold at least 2σ below your mean.
-          # If unsure, omit it and rely on score-regression-limit alone.
-          fail-threshold: 60
-          tier2-fail-threshold: 50
-          post-pr-comment: true
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AWAF_PROVIDER: anthropic               # anthropic | openai | azure | google | litellm
+          AWAF_MODEL: claude-haiku-4-5-20251001  # optional; omit to use the provider default
 ```
 
 **Recommended cadence:** weekly schedule or on-demand before releases. Running on every PR makes sense only for teams actively refactoring agent architecture. For most teams, weekly is sufficient -- architecture changes slowly.
@@ -368,15 +366,15 @@ If you do run on PRs, use `on: pull_request` with a `paths:` filter so only agen
 ### GitLab CI
 
 ```yaml
-include:
-  - remote: 'https://raw.githubusercontent.com/YogirajA/awaf-cli/main/integrations/gitlab/awaf-gitlab-ci.yml'
-
 awaf:
+  image: python:3.12-slim
+  script:
+    - pip install awaf
+    - awaf run --ci --paths .
   variables:
-    ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
     AWAF_PROVIDER: anthropic
-    AWAF_PROJECT_NAME: my-agent
-    AWAF_FAIL_THRESHOLD: "60"
+    # ANTHROPIC_API_KEY is set as a masked CI/CD variable in project settings.
+    # Gates (overall_fail, tier2_fail, warn_only) live in a committed awaf.toml.
 ```
 
 ### Skill Eval Grading (`awaf eval-skill`)
