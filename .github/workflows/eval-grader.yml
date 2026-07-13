@@ -1,0 +1,51 @@
+name: Skill Eval Grader
+
+on:
+  schedule:
+    # Nightly at 07:00 UTC, catches model/prompt regressions in the grader
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  grade:
+    name: Grade awaf skill eval cases (requires API key)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout awaf-cli
+        uses: actions/checkout@v4
+        with:
+          path: awaf-cli
+
+      - name: Checkout awaf-skill
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/awaf-skill
+          path: awaf-skill
+          # If awaf-skill is private, the default GITHUB_TOKEN cannot clone it;
+          # add `token: ${{ secrets.AWAF_SKILL_PAT }}` with a PAT that can read it.
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        working-directory: awaf-cli
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        working-directory: awaf-cli
+        run: uv sync --all-extras
+
+      - name: Run eval grader
+        working-directory: awaf-cli
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run awaf eval-skill --skill-dir ../awaf-skill --judge-model claude-opus-4-5 --output eval-metrics.json
+
+      - name: Upload metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-metrics-${{ github.run_id }}
+          path: awaf-cli/eval-metrics.json

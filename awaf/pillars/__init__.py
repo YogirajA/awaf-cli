@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
+from awaf.config import GraphConfig
+from awaf.graph import ArchitectureGraph, render_graph_block, select_slices
 from awaf.pillars.base import PillarAgent, PillarResult
 from awaf.pillars.context_integrity import ContextIntegrityAgent
 from awaf.pillars.controllability import ControllabilityAgent
@@ -34,18 +37,97 @@ _STAGGER_S = 1.0
 
 def _run_with_cb(
     agent: PillarAgent,
-    provider: LLMProvider,
-    content: str,
+    eval_fn: Callable[[PillarAgent], PillarResult],
     cb: Callable[[str], None] | None,
     start_delay: float,
-    model: str = "",
 ) -> PillarResult:
-    """Optionally delay, fire the progress callback, then run the pillar."""
+    """Optionally delay, fire the progress callback, then run the pillar via eval_fn."""
     if start_delay > 0:
         time.sleep(start_delay)
     if cb:
         cb(agent.name)
-    return agent.evaluate(provider, content, model=model)
+    return eval_fn(agent)
+
+
+def _starvation_retry(
+    agent: PillarAgent,
+    res: PillarResult,
+    included_paths: set[str],
+    provider: LLMProvider,
+    model: str,
+    read_lines: Callable[[str], list[str]],
+    count_tokens: Callable[[str], int],
+    files_by_len: dict[str, int],
+    graph_block: str,
+    extra: str,
+    slice_budget: int,
+) -> PillarResult:
+    """
+    One-shot retry for a starved pillar.
+
+    If *res* reports low confidence with evidence gaps that name a scanned file not
+    already covered by the pillar's cited slices (matched by whole file/basename token,
+    not substring), append that file's whole content to the user context and re-run
+    evaluate() once. Otherwise return *res* unchanged. Bounded to a single retry.
+
+    The retry's usage is added to the original call's so both LLM calls are billed to the
+    caller's cost/budget accounting, and a retry that failed to parse never replaces the
+    valid original result (it would downgrade a real score to a parse-failure 0).
+    """
+    if res.confidence not in {"self_reported", "partial"} or not res.evidence_gaps:
+        return res
+
+    # Match scanned files against gap text by WHOLE path/basename token (a plain substring
+    # test wrongly fires "base.py" on a gap naming "database.py").
+    gaps_text = " ".join(res.evidence_gaps)
+    gap_tokens = {t.replace("\\", "/") for t in re.split(r"[\s,;:()\[\]{}\"'`]+", gaps_text) if t}
+    gap_basenames = {os.path.basename(t) for t in gap_tokens}
+    missing = sorted(
+        p
+        for p in files_by_len
+        if p not in included_paths and (os.path.basename(p) in gap_basenames or p in gap_tokens)
+    )
+    if not missing:
+        return res
+
+    chunks: list[str] = []
+    used = 0
+    for path in missing:
+        lines = read_lines(path)
+        if not lines:
+            continue
+        text = f"# File: {path} (lines 1-{len(lines)})\n" + "\n".join(lines)
+        t = count_tokens(text)
+        if used + t > slice_budget:
+            continue
+        chunks.append(text)
+        used += t
+    if not chunks:
+        return res
+
+    appended = "\n".join(chunks)
+    new_extra = f"{extra}\n{appended}" if extra else appended
+    retry = agent.evaluate(
+        provider,
+        graph_block,
+        model=model,
+        extra_user_context=new_extra,
+        files_by_len=files_by_len,
+    )
+    # Both LLM calls happened; bill both regardless of which result we keep.
+    combined_in = res.input_tokens + retry.input_tokens
+    combined_out = res.output_tokens + retry.output_tokens
+    combined_cc = res.cache_creation_input_tokens + retry.cache_creation_input_tokens
+    combined_cr = res.cache_read_input_tokens + retry.cache_read_input_tokens
+    combined_lat = res.latency_ms + retry.latency_ms
+    # A parse-failed retry must not clobber a valid partial result with a 0/self_reported.
+    chosen = res if retry.parse_failed else retry
+    chosen.input_tokens = combined_in
+    chosen.output_tokens = combined_out
+    chosen.cache_creation_input_tokens = combined_cc
+    chosen.cache_read_input_tokens = combined_cr
+    chosen.latency_ms = combined_lat
+    return chosen
 
 
 # All 10 pillar agents in assessment order
@@ -79,7 +161,7 @@ class AssessmentResult:
 
 def compute_overall_score(results: list[PillarResult]) -> float:
     """
-    AWAF v1.3 weighted average:
+    AWAF v1.4 weighted average:
       overall = sum(score * weight) / sum(weights)
       Tier 2 pillars: 1.5x weight. All others: 1.0x.
     Skipped and not-applicable pillars are excluded from both numerator and denominator.
@@ -107,6 +189,9 @@ def run_assessment(
     model: str = "",
     pillar_delay_seconds: float = 0.0,
     on_pillar_start: Callable[[str], None] | None = None,
+    graph: ArchitectureGraph | None = None,
+    scanned_files: dict[str, str] | None = None,
+    graph_config: GraphConfig | None = None,
 ) -> AssessmentResult:
     """
     Run all (or one) pillar agents against *artifact_content*.
@@ -115,6 +200,11 @@ def run_assessment(
     - session_budget_usd: approximate guardrail; remaining pillars skipped when exceeded
     - estimate_cost_fn: callable(model, input_tokens, output_tokens) -> float
     - pillar_delay_seconds: seconds to sleep between pillars (sequential mode only)
+    - graph / scanned_files / graph_config: optional code-graph evidence mode. When
+      *graph* is provided and graph_config.enabled is not False, all pillars are sent
+      the same deterministic graph block (instead of the raw artifact dump) plus a
+      per-pillar block of cited code slices. When *graph* is None (or graph_config
+      disables it), behavior is identical to today's raw-artifact mode.
     """
     agents = ALL_AGENTS
     if pillar_filter:
@@ -127,6 +217,55 @@ def run_assessment(
     results: list[PillarResult] = []
     cumulative_cost = 0.0
     budget_exceeded = False
+
+    eval_fn: Callable[[PillarAgent], PillarResult]
+    if graph is not None and (graph_config is None or graph_config.enabled):
+        g: ArchitectureGraph = graph
+        gcfg = graph_config or GraphConfig()
+        files = scanned_files or {}
+        # Split each file's lines once (not once per pillar): read_lines is called for every
+        # anchor/role file by all 10 pillars, and files_by_len derives from the same split.
+        lines_by_path = {p: c.splitlines() for p, c in files.items()}
+        files_by_len = {p: len(lines) for p, lines in lines_by_path.items()}
+        graph_block = render_graph_block(g)
+        slice_budget = gcfg.slice_budget
+        context_lines = gcfg.context_lines
+        starvation_retry_enabled = gcfg.starvation_retry
+
+        def read_lines(path: str) -> list[str]:
+            return lines_by_path.get(path, [])
+
+        def eval_fn(agent: PillarAgent) -> PillarResult:
+            sr = select_slices(
+                g, agent.name, read_lines, provider.count_tokens, slice_budget, context_lines
+            )
+            extra = f"## Cited code slices\n{sr.text}" if sr.text else ""
+            res = agent.evaluate(
+                provider,
+                graph_block,
+                model=model,
+                extra_user_context=extra,
+                files_by_len=files_by_len,
+            )
+            if starvation_retry_enabled:
+                res = _starvation_retry(
+                    agent,
+                    res,
+                    sr.paths,
+                    provider,
+                    model,
+                    read_lines,
+                    provider.count_tokens,
+                    files_by_len,
+                    graph_block,
+                    extra,
+                    slice_budget,
+                )
+            return res
+    else:
+
+        def eval_fn(agent: PillarAgent) -> PillarResult:
+            return agent.evaluate(provider, artifact_content, model=model)
 
     _concurrency = min(len(agents), int(os.environ.get("AWAF_CONCURRENCY", "1")))
     _sequential = _concurrency == 1 or pillar_delay_seconds > 0
@@ -144,7 +283,7 @@ def run_assessment(
             if on_pillar_start:
                 on_pillar_start(agent.name)
             try:
-                result = agent.evaluate(provider, artifact_content, model=model)
+                result = eval_fn(agent)
                 result = validate_pillar_result(result, provider.config.max_tokens)
             except Exception as exc:
                 logger.warning("Pillar '%s' failed: %s", agent.name, exc)
@@ -196,7 +335,7 @@ def run_assessment(
             if on_pillar_start:
                 on_pillar_start(foundation_agent.name)
             try:
-                f_result = foundation_agent.evaluate(provider, artifact_content, model=model)
+                f_result = eval_fn(foundation_agent)
                 f_result = validate_pillar_result(f_result, provider.config.max_tokens)
             except Exception as exc:
                 logger.warning("Pillar 'Foundation' failed: %s", exc)
@@ -244,11 +383,9 @@ def run_assessment(
                         pool.submit(
                             _run_with_cb,
                             a,
-                            provider,
-                            artifact_content,
+                            eval_fn,
                             on_pillar_start,
                             i * _STAGGER_S,
-                            model,
                         ): a
                         for i, a in enumerate(remaining_agents)
                     }
@@ -307,11 +444,9 @@ def run_assessment(
                     pool.submit(
                         _run_with_cb,
                         a,
-                        provider,
-                        artifact_content,
+                        eval_fn,
                         on_pillar_start,
                         i * _STAGGER_S,
-                        model,
                     ): a
                     for i, a in enumerate(agents)
                 }

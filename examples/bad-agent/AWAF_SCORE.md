@@ -1,6 +1,6 @@
 # AWAF Assessment — Q&A Agent
 
-**AWAF v1.3 | 2026-03-15**
+**AWAF v1.4 | 2026-03-15**
 
 ---
 
@@ -12,9 +12,9 @@
 > |-------|--------|-----------------------------|
 > | **0–24** | **Not Ready** | **Do not ship — structural problems that will cause outages** |
 > | 25–49 | High Risk | Will cause production incidents; architectural rework needed |
-> | 50–74 | Needs Work | Meaningful gaps; addressable but not quickly |
-> | 75–89 | Near Ready | Minor gaps; addressable before go-live |
-> | 90–100 | Production Ready | Sound patterns across all 10 pillars |
+> | 50–69 | Needs Work | Meaningful gaps; addressable but not quickly |
+> | 70–84 | Near Ready | Minor gaps; addressable before go-live |
+> | 85–100 | Production Ready | Sound patterns across all 10 pillars |
 >
 > The score of 11 reflects something specific: **Foundation failed**. When Foundation scores below 40, AWAF stops weighting it into the overall score and instead treats it as a structural block. The session-service dependency means this agent cannot function independently — a single upstream failure takes it down completely, with no fallback. That is a deployment risk, not a code quality issue.
 >
@@ -69,7 +69,7 @@ To reach **Not Ready → High Risk (25–49)**, the minimum viable changes are:
 3. Cap `history` to the last N turns before each API call
 4. Add a `SESSION_TOKEN_LIMIT` guard and break the loop when exceeded
 
-To reach **Needs Work (50–74)**, additionally:
+To reach **Needs Work (50–69)**, additionally:
 
 5. Add `SIGTERM` handler that sets a kill flag checked in the main loop
 6. Create `evals/` with at least a model-selection unit test (no API key required)

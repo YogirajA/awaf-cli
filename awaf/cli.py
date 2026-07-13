@@ -5,13 +5,23 @@ import os
 import statistics
 import sys
 import textwrap
+import time
 import tomllib
 from datetime import UTC
 from typing import Any
 
 import click
 
-from awaf.config import resolve_ci_config, resolve_provider_config
+from awaf import reportcheck
+from awaf.config import resolve_ci_config, resolve_graph_config, resolve_provider_config
+from awaf.findings import (
+    LifecycleResult,
+    classify_findings,
+    filter_by_pillars,
+    finding_signature,
+)
+from awaf.graph import graph_to_json
+from awaf.graph_extractor import get_graph
 from awaf.providers import get_provider
 from awaf.providers.base import ProviderConfigError
 
@@ -44,23 +54,6 @@ _PROVIDER_TABLE: list[tuple[str, str, str]] = [
     ("litellm", "", ""),
 ]
 
-_READINESS: list[tuple[int, str]] = [
-    (85, "Production Ready"),
-    (70, "Near Ready"),
-    (50, "Needs Work"),
-    (25, "High Risk"),
-    (0, "Not Ready"),
-]
-
-_READINESS_DESCRIPTIONS: dict[str, str] = {
-    "Production Ready": "Fully ready. Variance within this band is noise.",
-    "Near Ready": "Close to production. Address findings before deploying.",
-    "Needs Work": "Notable gaps. Resolve High findings before production use.",
-    "High Risk": "Significant control failures. Not suitable for production.",
-    "Not Ready": "Critical gaps across multiple pillars. Major rework required.",
-}
-
-
 _TIER1_PILLAR_NAMES: frozenset[str] = frozenset(
     {"Op. Excellence", "Security", "Reliability", "Performance", "Cost Optim.", "Sustainability"}
 )
@@ -84,15 +77,64 @@ _PILLAR_ROWS: list[tuple[str, str, str, bool]] = [
 ]
 
 
+def _load_findings_list(blob: str) -> list[dict[str, Any]]:
+    """Parse a findings JSON blob into a list of dict findings. Never raises.
+
+    Tolerates a legacy or hand-edited row whose findings column is valid JSON but not a list
+    of dicts (a bare object, or a list of strings): those flow into classify_findings ->
+    finding_signature and would crash with AttributeError otherwise.
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(blob)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [f for f in data if isinstance(f, dict)]
+
+
+def _evaluated_pillars(rec: object) -> set[str]:
+    """Pillar display-names a stored assessment actually evaluated (non-null score column).
+
+    Lets a lifecycle diff be scoped to pillars present in BOTH runs, so a `--pillar` run is
+    never diffed against a full run (which would falsely report other pillars as resolved).
+    """
+    return {
+        name
+        for name, score_attr, _conf_attr, _is_t2 in _PILLAR_ROWS
+        if getattr(rec, score_attr, None) is not None
+    }
+
+
+def _comparable_lifecycle(
+    current_findings: list[dict[str, Any]],
+    current_pillars: set[str],
+    prev_rec: object | None,
+) -> LifecycleResult | None:
+    """Lifecycle diff of *current_findings* against *prev_rec*'s findings, scoped to the
+    pillars both runs evaluated. Returns None when there is no previous record.
+
+    One home for the pairing + comparable-pillar + shape-guarded classify logic that run,
+    compare, and report otherwise each spelled out identically.
+    """
+    if prev_rec is None:
+        return None
+    comparable = current_pillars & _evaluated_pillars(prev_rec)
+    prev_findings = _load_findings_list(getattr(prev_rec, "findings", "[]"))
+    return classify_findings(
+        filter_by_pillars(current_findings, comparable),
+        filter_by_pillars(prev_findings, comparable),
+    )
+
+
 def _readiness_label(score: float) -> str:
-    for threshold, label in _READINESS:
-        if score >= threshold:
-            return label
-    return "Not Ready"
+    return reportcheck.band_label(score)
 
 
 def _readiness_description(score: float) -> str:
-    return _READINESS_DESCRIPTIONS.get(_readiness_label(score), "")
+    return reportcheck.band_blurb(reportcheck.band_label(score))
 
 
 def _pillar_scores(assessments: list[Any], pillar_index: int) -> list[float]:
@@ -419,6 +461,28 @@ def cli() -> None:
     type=click.IntRange(min=1),
     help="Run N assessments and average results. Use with --force for variance checks.",
 )
+@click.option(
+    "--trace",
+    "trace",
+    default=None,
+    metavar="PATH",
+    help="Write a JSONL run-telemetry trace to PATH (opt-in; also via [telemetry] or AWAF_TELEMETRY_*).",
+)
+@click.option(
+    "--graph/--no-graph",
+    "use_graph",
+    default=None,
+    help=(
+        "Enable/disable code-graph evidence mode (default: awaf.toml [graph] "
+        "or AWAF_GRAPH; on unless disabled)."
+    ),
+)
+@click.option(
+    "--refresh-graph",
+    is_flag=True,
+    default=False,
+    help="Force re-extraction of the code graph, bypassing the on-disk cache.",
+)
 def run(
     paths: tuple[str, ...],
     ci: bool,
@@ -434,13 +498,16 @@ def run(
     allow_partial_scan: bool,
     force: bool,
     runs: int,
+    trace: str | None,
+    use_graph: bool | None,
+    refresh_graph: bool,
 ) -> None:
-    """Assess agent architecture against AWAF v1.3 across 10 pillars."""
+    """Assess agent architecture against AWAF v1.4 across 10 pillars."""
     import json as _json
     import subprocess
 
-    from awaf.db import save_assessment
-    from awaf.ingestor import ingest
+    from awaf.db import graph_cache_dir, save_assessment
+    from awaf.ingestor import ingest, ingest_files
     from awaf.pillars import run_assessment
     from awaf.pricing import estimate_cost
 
@@ -470,6 +537,13 @@ def run(
         sys.exit(2)
 
     effective_model = config.model or llm_provider.default_model
+
+    from awaf.config import resolve_telemetry_config
+    from awaf.telemetry import TraceWriter, new_run_id
+
+    _telemetry = resolve_telemetry_config(cli_trace=trace)
+    _run_id = new_run_id()
+    _t0 = time.monotonic()
 
     # Git context
     commit_hash = ""
@@ -583,8 +657,59 @@ def run(
         click.echo("No agent files found to analyze. Check --paths or awaf.toml [files].", err=True)
         sys.exit(2)
 
-    # Abort if token budget was exhausted — a partial codebase produces misleading scores
-    if ingest_result.truncated and not allow_partial_scan:
+    # Code-graph evidence — extracted BEFORE the raw-dump budget aborts so that, when a
+    # usable graph is available, pillars are evaluated on the whole-repo graph (not the
+    # budget-truncated raw dump) and the raw-dump truncation/context aborts do not fire on
+    # exactly the large repos graph mode exists to handle. A None graph (disabled or
+    # extraction failed) makes run_assessment fall back to the raw dump, unchanged.
+    graph_cfg = resolve_graph_config(cli_graph=use_graph, cli_refresh=refresh_graph)
+    architecture_graph = None
+    scanned_files_map: dict[str, str] = {}
+    if graph_cfg.enabled:
+        try:
+            scanned_pairs = ingest_files(
+                paths=scan_paths,
+                exclude_patterns=toml_data.get("files", {}).get("exclude", []),
+            )
+            architecture_graph = get_graph(
+                llm_provider,
+                scanned_pairs,
+                graph_cache_dir(),
+                refresh=graph_cfg.refresh,
+                extract_tokens=graph_cfg.extract_tokens,
+                cache_max=graph_cfg.cache_max,
+                model=effective_model,
+            )
+            scanned_files_map = dict(scanned_pairs)
+        except Exception as exc:
+            # Graph evidence is optional. Any unexpected failure degrades to the raw-dump path
+            # rather than breaking the run (get_graph already never raises; this guards
+            # ingest_files and any future regression in the graph modules).
+            click.echo(
+                f"  ⚠ Graph evidence unavailable ({exc}); using raw artifact evidence.",
+                err=True,
+            )
+            architecture_graph = None
+            scanned_files_map = {}
+
+    graph_active = architecture_graph is not None
+    # Extraction spend (0 on a cache hit or when falling back to the raw dump).
+    _extract_in = architecture_graph.extract_input_tokens if architecture_graph else 0
+    _extract_out = architecture_graph.extract_output_tokens if architecture_graph else 0
+    extract_cost = (
+        estimate_cost(effective_model, _extract_in, _extract_out) if architecture_graph else 0.0
+    )
+    if architecture_graph is not None and architecture_graph.truncated:
+        click.echo(
+            "  ⚠ Repo exceeded the graph extraction token cap; the graph is partial "
+            "(raise AWAF_GRAPH_EXTRACT_TOKENS to include more).",
+            err=True,
+        )
+
+    # Abort if token budget was exhausted — a partial codebase produces misleading scores.
+    # Skipped when a usable graph is available: pillars are graded on the graph (whole repo),
+    # so the raw dump being truncated is not fatal.
+    if ingest_result.truncated and not allow_partial_scan and not graph_active:
         token_skipped = [s for s in ingest_result.files_skipped if "token limit" in s]
         click.echo("", err=True)
         click.echo("ERROR: Token budget exhausted — assessment aborted.", err=True)
@@ -636,7 +761,9 @@ def run(
     from awaf.pricing import estimate_cost as _estimate_cost
 
     est_preflight_cost = _estimate_cost(effective_model, est_total_input, est_output_total)
-    est_total_cost = est_preflight_cost * runs
+    # Graph extraction is a real (one-time) LLM cost that must be counted in the preflight
+    # estimate and the budget abort, not just pillar calls.
+    est_total_cost = est_preflight_cost * runs + extract_cost
 
     click.echo("  PREFLIGHT")
     click.echo(
@@ -649,17 +776,22 @@ def run(
         f"  Total est      {est_total_input:>9,} tokens"
         f"  ({_n_pillars} pillars × ~{est_per_pillar:,})"
     )
+    if extract_cost > 0:
+        click.echo(f"  Graph extract       ~${extract_cost:.4f}  ({_extract_in:,} in tokens)")
     if runs > 1:
         click.echo(
-            f"  Cost est            ~${est_preflight_cost:.4f}/run × {runs} runs = ~${est_total_cost:.4f}"
+            f"  Cost est            ~${est_preflight_cost:.4f}/run × {runs} runs"
+            f" + graph = ~${est_total_cost:.4f}"
         )
     else:
-        click.echo(f"  Cost est            ~${est_preflight_cost:.4f}")
+        click.echo(f"  Cost est            ~${est_total_cost:.4f}")
     click.echo(_SEP)
 
-    # Auto-abort: artifacts fill too much of the context window
+    # Auto-abort: artifacts fill too much of the context window. Skipped when a usable graph
+    # is available: pillars receive the much smaller graph block, not the raw dump ctx_pct
+    # is measured from.
     _max_ctx_pct = float(os.environ.get("AWAF_MAX_CONTEXT_PCT", "85"))
-    if ctx_pct >= _max_ctx_pct:
+    if ctx_pct >= _max_ctx_pct and not graph_active:
         click.echo(
             f"ERROR: artifacts occupy {ctx_pct:.0f}% of the {effective_model} context window"
             f" (limit: {_max_ctx_pct:.0f}%). Assessment aborted — scores would be unreliable.",
@@ -706,6 +838,10 @@ def run(
     def _on_pillar_start(name: str) -> None:
         click.echo(f"  \u25b8 Evaluating {name}...")
 
+    # Charge graph extraction against the session budget so the pillar guard trips earlier
+    # (extraction already spent that money); pillar cost stays reported separately.
+    _pillar_budget = None if budget_usd is None else max(0.0, budget_usd - extract_cost)
+
     all_assessments: list[Any] = []
     for run_idx in range(runs):
         if runs > 1:
@@ -715,11 +851,14 @@ def run(
                 provider=llm_provider,
                 artifact_content=artifact_content,
                 pillar_filter=pillar,
-                session_budget_usd=budget_usd,
+                session_budget_usd=_pillar_budget,
                 estimate_cost_fn=estimate_cost,
                 model=effective_model,
                 pillar_delay_seconds=float(delay),
                 on_pillar_start=_on_pillar_start if runs == 1 else None,
+                graph=architecture_graph,
+                scanned_files=scanned_files_map,
+                graph_config=graph_cfg,
             )
         except ValueError as exc:
             click.echo(f"Assessment error: {exc}", err=True)
@@ -733,12 +872,20 @@ def run(
 
     assessment = _average_assessments(all_assessments) if runs > 1 else all_assessments[0]
 
+    # Fold the one-time graph-extraction spend into the reported totals so displayed and
+    # saved cost/tokens reflect the full run (pillar costs plus extraction).
+    assessment.total_input_tokens += _extract_in
+    assessment.total_output_tokens += _extract_out
+    assessment.estimated_cost_usd += extract_cost
+
     # Display
     _label = _readiness_label(assessment.overall_score)
     _desc = _readiness_description(assessment.overall_score)
     click.echo(_BANNER)
     click.echo(f"AWAF Assessment: {project_name}")
-    click.echo(f"AWAF v1.3  |  {_today()}  |  {config.provider_name} / {effective_model}")
+    click.echo(
+        f"{reportcheck.SPEC_VERSION}  |  {_today()}  |  {config.provider_name} / {effective_model}"
+    )
     click.echo(_SEP)
     click.echo(f"  Overall Score    {int(assessment.overall_score)}/100   {_label}")
     click.echo(f"  {_desc}")
@@ -761,11 +908,21 @@ def run(
         _print_variance_table(all_assessments)
         _print_variance_chart(all_assessments, out)
 
-    click.echo(f"  FILES ANALYZED     {len(ingest_result.files_scanned)} files")
-    if ingest_result.files_skipped:
-        click.echo(f"  FILES NOT SCANNED  {len(ingest_result.files_skipped)} files")
-        for s in ingest_result.files_skipped[:5]:
-            click.echo(f"    {s}")
+    # Coverage reflects what the pillars actually saw: the whole-repo graph file set when
+    # graph mode is active (unbudgeted), else the raw-dump scan (which the token budget may
+    # have truncated). Reporting ingest_result here in graph mode would misdescribe coverage.
+    if graph_active:
+        analyzed_files = sorted(scanned_files_map.keys())
+        skipped_files: list[str] = []
+        click.echo(f"  FILES ANALYZED     {len(analyzed_files)} files  (code-graph evidence)")
+    else:
+        analyzed_files = list(ingest_result.files_scanned)
+        skipped_files = list(ingest_result.files_skipped)
+        click.echo(f"  FILES ANALYZED     {len(analyzed_files)} files")
+        if skipped_files:
+            click.echo(f"  FILES NOT SCANNED  {len(skipped_files)} files")
+            for s in skipped_files[:5]:
+                click.echo(f"    {s}")
     if assessment.budget_exceeded:
         click.echo("  WARNING: session budget exceeded; some pillars skipped")
 
@@ -801,9 +958,7 @@ def run(
     all_gaps = []
     all_improvements = []
     for r in assessment.pillar_results:
-        for f in r.findings:
-            f["pillar"] = r.name
-            all_findings.append(f)
+        all_findings.extend(r.findings)
         for rec in r.recommendations:
             rec["pillar"] = r.name
             all_recs.append(rec)
@@ -814,6 +969,26 @@ def run(
     _sev = {"Critical": 0, "High": 1, "Medium": 2}
     all_findings.sort(key=lambda f: _sev.get(f.get("severity", ""), 3))
 
+    # Lifecycle vs the previous run, loaded BEFORE this run's rows are saved,
+    # so _prev_records[0] is the genuine previous run.
+    from awaf.db import get_recent_assessments
+
+    _prev_records = get_recent_assessments(project_name, limit=1)
+    # Diff only pillars this run and the previous run BOTH evaluated (see _comparable_lifecycle):
+    # without it a `--pillar security` run diffed against a full run reports every other pillar
+    # as resolved, and the pillar-only row then poisons the next full run's diff.
+    _current_pillars = {r.name for r in assessment.pillar_results if not r.skipped}
+    lifecycle = (
+        _comparable_lifecycle(
+            all_findings, _current_pillars, _prev_records[0] if _prev_records else None
+        )
+        or LifecycleResult()
+    )
+    if all_findings and _prev_records:
+        n, rec_, res = lifecycle.counts
+        click.echo()
+        click.echo(f"  Findings since last run: {n} new, {rec_} recurring, {res} resolved")
+
     if all_findings:
         click.echo()
         click.echo("  FINDINGS  (ordered by severity)")
@@ -821,7 +996,9 @@ def run(
             sev = f.get("severity", "")
             pillar = f.get("pillar", "")
             detail = f.get("detail", "")
-            _print_wrapped(f"  [{sev:<8}]  {pillar:<18}  ", detail)
+            status = lifecycle.statuses.get(finding_signature(f), "") if _prev_records else ""
+            tag = f"[{status.upper()}] " if status else ""
+            _print_wrapped(f"  [{sev:<8}]  {pillar:<18}  {tag}", detail)
         click.echo(_SEP)
 
     if all_recs:
@@ -879,7 +1056,7 @@ def run(
             reasoning_confidence=_conf("Reasoning Integ."),
             controllability_confidence=_conf("Controllability"),
             context_integrity_confidence=_conf("Context Integrity"),
-            evidence_reviewed=_json.dumps(ingest_result.files_scanned),
+            evidence_reviewed=_json.dumps(analyzed_files),
             evidence_gaps=_json.dumps(all_gaps),
             findings=_json.dumps(all_findings),
             recommendations=_json.dumps(all_recs),
@@ -901,15 +1078,55 @@ def run(
             project_name=project_name,
             date=_today(),
             assessment=assessment,
-            ingest_result=ingest_result,
+            files_analyzed=analyzed_files,
+            files_skipped=skipped_files,
             all_findings=all_findings,
             all_recs=all_recs,
             all_gaps=all_gaps,
             all_improvements=all_improvements,
             provider_name=config.provider_name,
             effective_model=effective_model,
+            finding_status=(
+                {
+                    finding_signature(f): lifecycle.statuses.get(finding_signature(f), "")
+                    for f in all_findings
+                }
+                if _prev_records
+                else {}
+            ),
         )
         click.echo(f"  Artifact: {out}")
+
+    # Emit JSONL run telemetry when enabled: informational only, never gates the exit code.
+    if _telemetry.enabled:
+        _writer = TraceWriter(_telemetry.trace_path)
+        # Emit per-pillar events from the real per-run results, not the averaged assessment
+        # (whose PillarResults carry no token/latency data, so every event would be zeros).
+        for _run in all_assessments:
+            for r in _run.pillar_results:
+                _writer.pillar(_run_id, r)
+        _n, _rec, _res = lifecycle.counts
+        _writer.run(
+            _run_id,
+            {
+                "project": project_name,
+                "commit": commit_hash,
+                "branch": branch,
+                "provider": config.provider_name,
+                "model": effective_model,
+                "overall_score": assessment.overall_score,
+                "foundation_passed": assessment.foundation_passed,
+                "total_input_tokens": assessment.total_input_tokens,
+                "total_output_tokens": assessment.total_output_tokens,
+                "estimated_cost_usd": assessment.estimated_cost_usd,
+                "wall_ms": int((time.monotonic() - _t0) * 1000),
+                "pillar_count": len(assessment.pillar_results),
+                "new_findings": _n,
+                "recurring_findings": _rec,
+                "resolved_findings": _res,
+            },
+        )
+        click.echo(f"  Trace: {_telemetry.trace_path}")
 
     # Threshold checks → exit code
     tier2_scores = [
@@ -947,6 +1164,118 @@ def run(
 
     if failed and not warn_only:
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# awaf graph
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="graph")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the graph as JSON.")
+@click.option(
+    "--refresh",
+    is_flag=True,
+    default=False,
+    help="Force re-extraction of the code graph, bypassing the on-disk cache.",
+)
+def graph(path: str, as_json: bool, refresh: bool) -> None:
+    """Extract and inspect the code-architecture graph for PATH (default: current directory)."""
+    from awaf.db import graph_cache_dir
+    from awaf.graph_extractor import is_cached
+    from awaf.ingestor import ingest_files
+
+    toml_data = _read_toml()
+    graph_cfg = resolve_graph_config(cli_refresh=refresh)
+
+    try:
+        config = resolve_provider_config()
+        llm_provider = get_provider(config)
+    except ProviderConfigError as exc:
+        click.echo(f"Configuration error: {exc}", err=True)
+        sys.exit(2)
+
+    # Guard file discovery: ingest_files -> os.path.relpath raises ValueError on Windows when
+    # PATH is on a different drive than the CWD; degrade to a clean error, not a traceback.
+    try:
+        scanned_pairs = ingest_files(
+            paths=[path],
+            exclude_patterns=toml_data.get("files", {}).get("exclude", []),
+        )
+    except Exception as exc:
+        click.echo(f"Could not scan {path}: {exc}", err=True)
+        sys.exit(2)
+    if not scanned_pairs:
+        click.echo(f"No files found to analyze under {path}.", err=True)
+        sys.exit(2)
+
+    cache_dir = graph_cache_dir()
+    model = getattr(config, "model", "") or ""
+
+    # Cheap existence probe (no parse); get_graph re-derives the same key and reads the file.
+    was_cached = (not refresh) and is_cached(
+        scanned_pairs, cache_dir, extract_tokens=graph_cfg.extract_tokens, model=model
+    )
+
+    result = get_graph(
+        llm_provider,
+        scanned_pairs,
+        cache_dir,
+        refresh=refresh,
+        extract_tokens=graph_cfg.extract_tokens,
+        cache_max=graph_cfg.cache_max,
+        model=model,
+    )
+
+    if result is None:
+        click.echo(
+            "Graph extraction unavailable; falling back to raw evidence "
+            "(the graph could not be extracted from this repo)."
+        )
+        return
+
+    if as_json:
+        click.echo(graph_to_json(result))
+        return
+
+    node_counts: dict[str, int] = {}
+    for n in result.nodes:
+        node_counts[n.type] = node_counts.get(n.type, 0) + 1
+
+    guardrail_count = node_counts.get("guardrail", 0)
+    entry_points = [
+        n.name for n in result.nodes if n.type == "agent" and n.attrs.get("entry_point")
+    ]
+
+    role_counts: dict[str, int] = {}
+    for f in result.files:
+        role_counts[f.role] = role_counts.get(f.role, 0) + 1
+
+    click.echo(f"\nCode-Architecture Graph: {path}")
+    click.echo(_SEP)
+    click.echo("  NODE TYPES")
+    for t in sorted(node_counts):
+        click.echo(f"    {t:<16} {node_counts[t]:>4}")
+
+    click.echo()
+    click.echo(f"  Guardrails          {guardrail_count}")
+    click.echo(f"  Entry-point agents  {len(entry_points)}")
+    for name in entry_points:
+        click.echo(f"    - {name}")
+
+    click.echo()
+    click.echo("  FILE ROLES")
+    for r in sorted(role_counts):
+        click.echo(f"    {r:<16} {role_counts[r]:>4}")
+
+    click.echo()
+    click.echo(
+        f"  Totals   nodes={len(result.nodes)}  edges={len(result.edges)}"
+        f"  files={len(result.files)}"
+    )
+    click.echo(f"  Cache    {'hit' if was_cached else 'extracted (new)'}  ({cache_dir})")
+    click.echo(_SEP)
 
 
 def _pillar_table_lines(assessment: object) -> list[str]:
@@ -1103,6 +1432,102 @@ def providers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# awaf eval-skill
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="eval-skill")
+@click.option(
+    "--skill-dir",
+    default="../awaf-skill",
+    show_default=True,
+    help="Path to the awaf-skill repo root (contains skills/awaf/).",
+)
+@click.option("--provider", default=None, metavar="PROVIDER", help="LLM provider override.")
+@click.option("--model", default=None, metavar="MODEL", help="Subject model that runs the skill.")
+@click.option(
+    "--judge-model",
+    default=None,
+    metavar="MODEL",
+    help="Model that grades each expectation. Defaults to the subject model; must be valid for --provider.",
+)
+@click.option("--gate", default=0.85, show_default=True, type=float, help="Minimum pass rate.")
+@click.option(
+    "--output",
+    default="eval-metrics.json",
+    show_default=True,
+    metavar="PATH",
+    help="Where to write the metrics JSON.",
+)
+def eval_skill(
+    skill_dir: str,
+    provider: str | None,
+    model: str | None,
+    judge_model: str | None,
+    gate: float,
+    output: str,
+) -> None:
+    """Run the awaf skill eval cases and grade each expectation with a judge model."""
+    import json as _json
+    from dataclasses import asdict
+    from pathlib import Path
+
+    from awaf import evalgrader
+    from awaf.pricing import estimate_cost
+
+    # Configuration errors get the same clean exit-2 boundary as `run`, so CI can tell a
+    # missing API key / bad skill dir apart from a genuine eval regression (exit 1).
+    try:
+        subject_cfg = resolve_provider_config(cli_provider=provider, cli_model=model)
+        judge_model_effective = judge_model or subject_cfg.model
+        judge_cfg = resolve_provider_config(cli_provider=provider, cli_model=judge_model_effective)
+        subject = get_provider(subject_cfg)
+        judge = get_provider(judge_cfg)
+        subject.validate_config()
+        judge.validate_config()
+    except ProviderConfigError as exc:
+        click.echo(f"Configuration error: {exc}", err=True)
+        sys.exit(2)
+
+    try:
+        summary = evalgrader.grade_all(
+            subject,
+            judge,
+            Path(skill_dir),
+            estimate_cost_fn=estimate_cost,
+            subject_model=subject_cfg.model,
+            judge_model=judge_cfg.model,
+        )
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        click.echo(f"Could not load skill eval cases from {skill_dir}: {exc}", err=True)
+        sys.exit(2)
+
+    with open(output, "w", encoding="utf-8") as fh:
+        fh.write(_json.dumps(asdict(summary), indent=2))
+
+    click.echo(
+        f"Pass rate: {summary.pass_rate:.0%} "
+        f"({summary.passed_expectations}/{summary.total_expectations} expectations)"
+    )
+    click.echo(f"Deterministic checks: {'PASS' if summary.deterministic_ok else 'FAIL'}")
+    click.echo(f"Metrics written to {output}")
+
+    # Zero graded expectations is not a gate failure — nothing was evaluated. Exit 2 with a
+    # clear message so CI does not read a vacuous 0% pass rate as a skill regression.
+    if summary.total_expectations == 0:
+        click.echo(
+            "No expectations were evaluated (all eval cases were skipped or empty).", err=True
+        )
+        sys.exit(2)
+
+    if summary.pass_rate < gate or not summary.deterministic_ok:
+        click.echo(
+            f"FAIL: pass rate below gate {gate:.0%} or a deterministic check failed.", err=True
+        )
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # awaf history
 # ---------------------------------------------------------------------------
 
@@ -1193,6 +1618,24 @@ def compare(id1: int, id2: int) -> None:
     click.echo(f"  #{id1}: {rec1.provider}/{rec1.model}  {rec1.created_at.strftime('%Y-%m-%d')}")
     click.echo(f"  #{id2}: {rec2.provider}/{rec2.model}  {rec2.created_at.strftime('%Y-%m-%d')}")
 
+    # Scope the diff to pillars evaluated in BOTH assessments (and shape-guard the blobs) so
+    # comparing a single-pillar run against a full one does not falsely report the rest resolved.
+    _life = (
+        _comparable_lifecycle(_load_findings_list(rec2.findings), _evaluated_pillars(rec2), rec1)
+        or LifecycleResult()
+    )
+    _n, _rec, _res = _life.counts
+    click.echo()
+    click.echo(f"  Findings: {_n} new, {_rec} recurring, {_res} resolved (id{id1} -> id{id2})")
+    for _f in _life.new:
+        click.echo(
+            f"    + [{_f.get('severity', ''):<8}] {_f.get('pillar', ''):<18} {_f.get('detail', '')}"
+        )
+    for _f in _life.resolved:
+        click.echo(
+            f"    - [{_f.get('severity', ''):<8}] {_f.get('pillar', ''):<18} {_f.get('detail', '')}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # awaf report
@@ -1204,7 +1647,7 @@ def compare(id1: int, id2: int) -> None:
     "--format",
     "fmt",
     default="compact",
-    type=click.Choice(["compact", "full", "json"]),
+    type=click.Choice(["compact", "full", "json", "html"]),
     show_default=True,
     help="Output format.",
 )
@@ -1245,8 +1688,20 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
         click.echo(_json.dumps(data, indent=2))
         return
 
+    if fmt == "html":
+        from awaf.db import get_recent_assessments as _get_recent
+        from awaf.report_html import render_html
+
+        _prev = _get_recent(rec.project_name or project_name, limit=2)
+        _prev_rec = _prev[1] if (len(_prev) >= 2 and _prev[0].id == rec.id) else None
+        life = _comparable_lifecycle(
+            _load_findings_list(rec.findings), _evaluated_pillars(rec), _prev_rec
+        )
+        click.echo(render_html(rec, life, project_name=project_name))
+        return
+
     click.echo(f"\nAWAF Assessment: {rec.project_name or project_name}")
-    click.echo(f"AWAF v1.3  |  {rec.created_at.strftime('%Y-%m-%d')}")
+    click.echo(f"{reportcheck.SPEC_VERSION}  |  {rec.created_at.strftime('%Y-%m-%d')}")
     click.echo(_SEP)
     click.echo(
         f"  Overall Score    {int(rec.overall_score)}  {_readiness_label(rec.overall_score)}"
@@ -1276,9 +1731,17 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
     # Evidence sections (full format only, or when data is present)
     evidence = _json.loads(rec.evidence_reviewed)
     gaps = _json.loads(rec.evidence_gaps)
-    findings = _json.loads(rec.findings)
+    findings = _load_findings_list(rec.findings)
     recs = _json.loads(rec.recommendations)
     improvements = _json.loads(rec.improve_suggestions)
+
+    from awaf.db import get_recent_assessments as _get_recent
+
+    # rec is the latest run; _prev[1] is the genuine prior run. _comparable_lifecycle scopes
+    # the diff to pillars evaluated in both so a prior single-pillar run cannot fabricate new/resolved.
+    _prev = _get_recent(rec.project_name or project_name, limit=2)
+    _prev_rec = _prev[1] if (len(_prev) >= 2 and _prev[0].id == rec.id) else None
+    _life = _comparable_lifecycle(findings, _evaluated_pillars(rec), _prev_rec)
 
     if evidence or fmt == "full":
         click.echo()
@@ -1309,7 +1772,11 @@ def report(fmt: str, coverage: bool, assessment_id: int | None) -> None:
                 pillar = f.get("pillar", "")
                 severity = f.get("severity", "")
                 detail = f.get("detail", "")
-                _print_wrapped(f"  [{severity:<8}]  {pillar:<18}  ", detail)
+                tag = ""
+                if _life is not None:
+                    status = _life.statuses.get(finding_signature(f), "")
+                    tag = f"[{status.upper()}] " if status else ""
+                _print_wrapped(f"  [{severity:<8}]  {pillar:<18}  {tag}", detail)
         else:
             click.echo("  — (no findings recorded)")
 
@@ -1383,13 +1850,15 @@ def _write_artifact(
     project_name: str,
     date: str,
     assessment: object,
-    ingest_result: object,
+    files_analyzed: list[str],
+    files_skipped: list[str],
     all_findings: list[dict],  # type: ignore[type-arg]
     all_recs: list[dict],  # type: ignore[type-arg]
     all_gaps: list[str],
     all_improvements: list[str],
     provider_name: str,
     effective_model: str,
+    finding_status: dict[str, str] | None = None,
 ) -> None:
     """Write a plain-text artifact report to *path*."""
     import datetime
@@ -1431,7 +1900,7 @@ def _write_artifact(
         a(banner_line)
     a("")
     a(f"AWAF Assessment: {project_name}")
-    a(f"AWAF v1.3 | {date} | {provider_name} / {effective_model}")
+    a(f"{reportcheck.SPEC_VERSION} | {date} | {provider_name} / {effective_model}")
     a(SEP_MAJOR)
     a("")
     a(f"Overall Score: {int(assessment.overall_score)}/100 -- {label}")
@@ -1500,10 +1969,8 @@ def _write_artifact(
     a("")
     a(SEP_MINOR)
 
-    # Files
-    files_scanned = getattr(ingest_result, "files_scanned", [])
-    files_skipped = getattr(ingest_result, "files_skipped", [])
-    a(f"FILES ANALYZED: {len(files_scanned)} files")
+    # Files (same coverage the console and DB report: graph file set in graph mode)
+    a(f"FILES ANALYZED: {len(files_analyzed)} files")
     if files_skipped:
         a(f"FILES NOT SCANNED: {len(files_skipped)} files")
         for s in files_skipped[:10]:
@@ -1520,7 +1987,9 @@ def _write_artifact(
             sev = f.get("severity", "")
             pillar = f.get("pillar", "")
             detail = _asc(f.get("detail", ""))
-            prefix = f"  [{sev:<8}]  {pillar:<18}  "
+            status = (finding_status or {}).get(finding_signature(f), "")
+            tag = f"[{status.upper()}] " if status else ""
+            prefix = f"  [{sev:<8}]  {pillar:<18}  {tag}"
             wrapped = textwrap.wrap(detail, width=78 - len(prefix))
             a(prefix + (wrapped[0] if wrapped else ""))
             cont = " " * len(prefix)

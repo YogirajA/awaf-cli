@@ -17,6 +17,14 @@ Stale context is corrupted reasoning. This pillar has no cloud equivalent.
 - Are tool response outputs filtered to relevant fields before re-entering context (not just input context pruned)?
 """
 
+_PATTERN_SIGNALS = """\
+PATTERN SIGNALS (advisory, not scored): use these to sharpen how you judge the criteria
+above; do not add new tally rows for them.
+- Memory-Augmented Generation: is there a compression or retrieval strategy, or does context grow unbounded?
+- Tool-Augmented Scratchpad: is the scratchpad trace bounded and persisted for debugging?
+- Reflexion: does the agent write outcomes back to a memory store for reuse rather than discarding them?
+"""
+
 _EVIDENCE = """\
 Context management code, prompt injection defense configs, input sanitization logic, context
 window usage dashboards (LangSmith, Langfuse), session lifecycle management, memory or context
@@ -34,4 +42,4 @@ class ContextIntegrityAgent(PillarAgent):
 
     @property
     def system_prompt(self) -> str:
-        return self._build_system_prompt("Context Integrity", _WHAT, _EVIDENCE)
+        return self._build_system_prompt("Context Integrity", _WHAT, _EVIDENCE, _PATTERN_SIGNALS)

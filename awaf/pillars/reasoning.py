@@ -13,6 +13,16 @@ A server does not hallucinate. Agents do. This pillar has no cloud equivalent.
 - Is there provenance tracking on tool results?
 """
 
+_PATTERN_SIGNALS = """\
+PATTERN SIGNALS (advisory, not scored): use these to sharpen how you judge the criteria
+above; do not add new tally rows for them.
+- Chain of Thought: is structured reasoning visible before answers, or are outputs merely asserted?
+- ReAct: are tool calls preceded by reasoning, and is each observation incorporated before the next action?
+- Plan & Execute: is planning separated from execution so the plan can be reviewed on its own?
+- Reflexion: are outcome critiques written to memory and reused in later runs?
+- Self-Consistency: if sample-and-vote is used, is N justified and applied selectively to ambiguous outputs rather than naively to everything?
+"""
+
 _EVIDENCE = """\
 LangSmith eval reports, Braintrust results, Promptfoo output, custom eval frameworks,
 hallucination rate metrics, reasoning trace logs, Arize or Langfuse tracing dashboards,
@@ -29,4 +39,4 @@ class ReasoningAgent(PillarAgent):
 
     @property
     def system_prompt(self) -> str:
-        return self._build_system_prompt("Reasoning Integrity", _WHAT, _EVIDENCE)
+        return self._build_system_prompt("Reasoning Integrity", _WHAT, _EVIDENCE, _PATTERN_SIGNALS)

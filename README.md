@@ -105,7 +105,7 @@ awaf run --provider litellm --model bedrock/anthropic.claude-3-5-sonnet-20241022
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 AWAF Assessment: my-agent
-AWAF v1.3  |  2026-03-15  |  openai / gpt-4o
+AWAF v1.4  |  2026-03-15  |  openai / gpt-4o
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Overall Score    78/100   Near Ready
   Close to production. Address findings before deploying.
@@ -227,6 +227,76 @@ terminal_format = "compact"    # compact | full | json
 
 ---
 
+## Agent-Architecture Graph (token-efficient evidence)
+
+By default, `awaf` precomputes a compact, pillar-shaped agent-architecture graph of your repository. Instead of sending the raw code dump to each pillar evaluator, awaf extracts a graph of agents, tools, guardrails, data stores, and context sources plus a file-role manifest, then sends that graph (plus targeted code slices for each pillar) as evidence. This replaces the raw-file path.
+
+### Cost Savings
+
+Replacing the raw-code dump with the graph cuts per-run input tokens by roughly 40-50%. Because the graph is cached by a content hash of the repository, an unchanged re-run reuses it and skips extraction entirely, so repeat runs approach free.
+
+### Quality and Reliability
+
+No more silent truncation on large repositories (the extractor sees the whole repo, not just the first 40k tokens). Findings gain validated `file:line` anchors (validated against the analyzed view of each file, which awaf minifies, so line numbers are close but not always exactly the raw-source line). Each pillar receives focused evidence instead of the full dump. The graph is on by default and fully optional: any extraction or cache failure automatically falls back to the raw-dump path, so a run is never worse than before.
+
+### Usage
+
+The graph is enabled by default. To disable it for a single run:
+
+```bash
+awaf run --no-graph
+```
+
+To force a rebuild of the cached graph:
+
+```bash
+awaf run --refresh-graph
+```
+
+To inspect what was extracted:
+
+```bash
+awaf graph                 # view the graph summary
+awaf graph --json          # raw JSON
+awaf graph --refresh       # rebuild before inspecting
+```
+
+### Configuration
+
+Configure the graph via the `[graph]` table in `awaf.toml`:
+
+```toml
+[graph]
+enabled = true
+extract_tokens = 150000    # one-time budget for the extraction call
+slice_budget = 12000       # per-pillar cited-code budget
+context_lines = 20         # lines around each anchored node
+cache_max = 8              # graphs kept in the on-disk cache
+starvation_retry = true    # re-feed raw slices to a low-confidence pillar once
+```
+
+Environment variable overrides (take precedence over `awaf.toml`):
+
+```bash
+AWAF_GRAPH=0                          # disable (0 or 1)
+AWAF_GRAPH_EXTRACT_TOKENS=150000
+AWAF_GRAPH_SLICE_BUDGET=12000
+AWAF_GRAPH_CACHE_MAX=8
+```
+
+The graph cache lives next to `awaf.db` in a `graph_cache/` directory.
+
+### What changes per run
+
+The shape of the change (actual numbers depend on your repo size, model, and provider):
+
+- **Raw path:** the full minified dump (up to the `AWAF_MAX_ARTIFACTS_TOKENS` budget) is the evidence for every pillar. Prompt caching on Anthropic makes the within-run re-reads cheap, but every fresh run re-sends the whole dump.
+- **Graph path:** one extraction pass builds the graph, then each pillar sees a small shared graph block plus only its cited code slices. On an unchanged re-run the cached graph is reused and extraction is skipped, so the per-run input shrinks to the graph block plus slices.
+
+Run `awaf graph` to see the actual node, edge, and file-role counts, the token cost of extraction, and the cache status for your own repository.
+
+---
+
 ## CI Integration
 
 ### What CI gates are valid — and which ones are not
@@ -309,6 +379,23 @@ awaf:
     AWAF_FAIL_THRESHOLD: "60"
 ```
 
+### Skill Eval Grading (`awaf eval-skill`)
+
+The awaf-skill Claude Code skill ships with five eval cases (`skills/awaf/evals/evals.json`), each a prompt plus an expected report summary and a list of natural-language expectations about the resulting report. `awaf eval-skill` runs those cases end to end and grades the output:
+
+```bash
+uv run awaf eval-skill --skill-dir ../awaf-skill --output eval-metrics.json
+```
+
+For each case it runs the skill prompt through the configured provider, applies deterministic report-shape and band-consistency checks, then has a judge model (`--judge-model`, which defaults to the subject model; the nightly workflow uses `claude-opus-4-5`) score every expectation against the report. It writes a metrics JSON (`--output`, default `eval-metrics.json`) and exits non-zero if the pass rate falls below the gate (`--gate`, default `0.85`) or any deterministic check fails.
+
+This corresponds to two CI layers:
+
+- **Layer 1 (report shape, band consistency)** is pure Python, no LLM calls, and runs in the normal unit-test suite (`ci.yml`) on every push and pull request, at no API cost.
+- **Layer 2 (LLM-judge grading)** calls a real provider and judge model, so it runs nightly (and on demand) via `.github/workflows/eval-grader.yml`. That workflow checks out both `awaf-cli` and `awaf-skill`, runs `eval-skill` with `ANTHROPIC_API_KEY` from repo secrets, and uploads the metrics JSON as a build artifact even when the gate fails.
+
+`--provider` and `--model` override the subject provider and model that run the skill, resolved the same way as `awaf run` (CLI flag, then environment, then `awaf.toml`).
+
 ---
 
 ## Exit Codes
@@ -339,6 +426,7 @@ awaf compare <id1> <id2>                         # diff two assessments
 awaf report --format json                        # JSON output for CI artifact upload
 awaf report --coverage                           # show files analyzed and skipped
 awaf providers                                   # list configured providers and status
+awaf eval-skill                                  # grade the awaf skill's eval cases (Layer 2)
 ```
 
 Progress is printed as each pillar starts (`▸ Evaluating Foundation...`). No color codes when stdout is not a TTY. No spinners in CI mode.
@@ -364,7 +452,7 @@ awaf run --delay 15
 
 ## What Gets Scored
 
-awaf-cli implements AWAF v1.3 across 10 pillars in 3 tiers. Full pillar definitions and scoring questions are in the specification repo.
+awaf-cli implements AWAF v1.4 across 10 pillars in 3 tiers. Full pillar definitions and scoring questions are in the specification repo.
 
 **Tier 0: Foundation.** Can this agent run independently?
 

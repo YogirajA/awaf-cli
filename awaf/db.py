@@ -21,6 +21,26 @@ def _db_url() -> str:
     return os.environ.get("AWAF_DB_URL", _DEFAULT_DB_URL)
 
 
+def db_path() -> str:
+    """Return the filesystem path to the SQLite database file.
+
+    Used by the CLI to co-locate the graph cache directory next to awaf.db.
+    """
+    return _db_url().removeprefix("sqlite:///")
+
+
+def graph_cache_dir() -> str:
+    """Directory for the code-graph cache, co-located next to the SQLite db file.
+
+    For a non-file DB URL (e.g. postgres) or an engine URL variant db_path() cannot reduce
+    to a filesystem path, fall back to a cache dir in the CWD rather than deriving a nonsense
+    path from the URL (which would fail os.makedirs and silently disable the cache).
+    """
+    p = db_path()
+    directory = os.path.dirname(p) if p and "://" not in p else ""
+    return os.path.join(directory, "graph_cache")
+
+
 class _Base(DeclarativeBase):
     pass
 

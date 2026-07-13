@@ -14,6 +14,12 @@ This pillar has no cloud equivalent.
 - Can scope be restricted at runtime without redeployment?
 """
 
+_PATTERN_SIGNALS = """\
+PATTERN SIGNALS (advisory, not scored): use these to sharpen how you judge the criteria
+above; do not add new tally rows for them.
+- Plan & Execute: if the agent plans then executes, can the plan be inspected and interrupted before or between steps rather than only killed outright?
+"""
+
 _EVIDENCE = """\
 Kill switch implementation in code, API endpoints for pause/resume/cancel, human-in-the-loop
 workflow configs (LangGraph interrupt nodes, CrewAI human input steps), approval gate logic,
@@ -31,4 +37,4 @@ class ControllabilityAgent(PillarAgent):
 
     @property
     def system_prompt(self) -> str:
-        return self._build_system_prompt("Controllability", _WHAT, _EVIDENCE)
+        return self._build_system_prompt("Controllability", _WHAT, _EVIDENCE, _PATTERN_SIGNALS)

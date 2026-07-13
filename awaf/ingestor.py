@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 _SUPPORTED_EXTS = {
@@ -112,46 +112,35 @@ def ingest(
     total_tokens = 0
     truncated = False
 
-    for base_path in paths:
-        base_path = os.path.abspath(base_path)
-        if os.path.isfile(base_path):
-            if os.path.basename(base_path).lower() in _DEFAULT_EXCLUDE_FILES:
-                continue
-            candidates = [base_path]
-        else:
-            candidates = _walk(base_path, excludes)
+    for rel_path, abs_path in _discover(paths, excludes):
+        # Size gate
+        try:
+            size = os.path.getsize(abs_path)
+        except OSError:
+            files_skipped.append(f"{rel_path}  (unreadable)")
+            continue
 
-        for abs_path in candidates:
-            rel_path = os.path.relpath(abs_path)
+        if size > _MAX_FILE_BYTES:
+            files_skipped.append(f"{rel_path}  (>{_MAX_FILE_BYTES // 1024}KB)")
+            continue
 
-            # Size gate
-            try:
-                size = os.path.getsize(abs_path)
-            except OSError:
-                files_skipped.append(f"{rel_path}  (unreadable)")
-                continue
+        try:
+            text = _read_file(abs_path)
+        except (OSError, UnicodeDecodeError):
+            files_skipped.append(f"{rel_path}  (read error)")
+            continue
 
-            if size > _MAX_FILE_BYTES:
-                files_skipped.append(f"{rel_path}  (>{_MAX_FILE_BYTES // 1024}KB)")
-                continue
+        chunk = f"# File: {rel_path}\n{text}\n"
+        tokens = count_tokens_fn(chunk)
 
-            try:
-                text = _read_file(abs_path)
-            except (OSError, UnicodeDecodeError):
-                files_skipped.append(f"{rel_path}  (read error)")
-                continue
+        if total_tokens + tokens > max_tokens:
+            files_skipped.append(f"{rel_path}  (token limit reached)")
+            truncated = True
+            continue
 
-            chunk = f"# File: {rel_path}\n{text}\n"
-            tokens = count_tokens_fn(chunk)
-
-            if total_tokens + tokens > max_tokens:
-                files_skipped.append(f"{rel_path}  (token limit reached)")
-                truncated = True
-                continue
-
-            chunks.append(chunk)
-            files_scanned.append(rel_path)
-            total_tokens += tokens
+        chunks.append(chunk)
+        files_scanned.append(rel_path)
+        total_tokens += tokens
 
     return IngestorResult(
         content="\n".join(chunks),
@@ -160,6 +149,63 @@ def ingest(
         total_tokens=total_tokens,
         truncated=truncated,
     )
+
+
+def ingest_files(
+    paths: list[str], exclude_patterns: list[str] | None = None
+) -> list[tuple[str, str]]:
+    """
+    Discover and read ALL artifact files from *paths* as (rel_path, minified_content) pairs.
+
+    Reuses the same discovery (_walk) and per-file read/minify (_read_file, which already
+    applies the size and line-count gates) as ingest(), so "scanned files" means the same
+    thing across both. Unlike ingest(), this does NOT apply the AWAF_MAX_ARTIFACTS_TOKENS
+    budget -- the code-graph extractor needs to see the full repo and enforces its own
+    (much larger) token cap when packing the extraction payload. This is what delivers the
+    no-truncation benefit of graph mode over the raw-dump path.
+
+    Files are read WITHOUT minification: the graph records file:line anchors that are shown
+    to users and stored, so they must reference real on-disk lines. Minification deletes
+    blank/comment/docstring lines and would shift every anchor below the deletion.
+    """
+    excludes = set(_DEFAULT_EXCLUDE + (exclude_patterns or []))
+    pairs: list[tuple[str, str]] = []
+
+    for rel_path, abs_path in _discover(paths, excludes):
+        try:
+            size = os.path.getsize(abs_path)
+        except OSError:
+            continue
+        if size > _MAX_FILE_BYTES:
+            continue
+
+        try:
+            text = _read_file(abs_path, minify=False)
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        pairs.append((rel_path, text))
+
+    return pairs
+
+
+def _discover(paths: list[str], excludes: set[str]) -> Iterator[tuple[str, str]]:
+    """Yield (rel_path, abs_path) for every artifact file under *paths*.
+
+    Shared file-discovery scaffold for ingest() and ingest_files() so the two paths agree
+    on what "scanned files" means; each caller then applies its own size/read/budget policy.
+    rel_path is forward-slash normalized.
+    """
+    for base_path in paths:
+        base_path = os.path.abspath(base_path)
+        if os.path.isfile(base_path):
+            if os.path.basename(base_path).lower() in _DEFAULT_EXCLUDE_FILES:
+                continue
+            candidates = [base_path]
+        else:
+            candidates = _walk(base_path, excludes)
+        for abs_path in candidates:
+            yield os.path.relpath(abs_path).replace(os.sep, "/"), abs_path
 
 
 def _walk(base: str, excludes: set[str]) -> list[str]:
@@ -177,11 +223,11 @@ def _walk(base: str, excludes: set[str]) -> list[str]:
     return sorted(results)
 
 
-def _read_file(path: str) -> str:
+def _read_file(path: str, minify: bool = _MINIFY) -> str:
     with open(path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     ext = os.path.splitext(path)[1].lower()
-    if _MINIFY:
+    if minify:
         text = _minify(text, ext)
     lines = text.splitlines(keepends=True)
     if len(lines) > _MAX_FILE_LINES:
