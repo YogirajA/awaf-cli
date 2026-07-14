@@ -1,9 +1,8 @@
 name: Skill Eval Grader
 
 on:
-  schedule:
-    # Nightly at 07:00 UTC, catches model/prompt regressions in the grader
-    - cron: "0 7 * * *"
+  # Manual only: this run makes real (paid) LLM calls, so it is not scheduled.
+  # Trigger it from the Actions tab or with: gh workflow run eval-grader.yml
   workflow_dispatch: {}
 
 jobs:
