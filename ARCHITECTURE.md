@@ -29,6 +29,8 @@ The graph is score-neutral: it changes what evidence a pillar sees, never the sc
 
 Pillar agents never import a concrete adapter. They call `provider.complete(system, user, artifact_content)` through the `awaf/providers/` abstraction (Anthropic, OpenAI, Azure, Google, LiteLLM), selected by CLI flag, environment variable, or `awaf.toml` in that priority order. Retry with backoff lives once in `awaf/retry.py`, not in adapters or agents.
 
+This is a thin abstraction over provider SDKs rather than an agent-orchestration framework (CrewAI, LangChain, DSPy); see [ADR-001](docs/adr/001-no-agent-orchestration-frameworks.md) for why.
+
 ## Persistence
 
 Results are stored in SQLite via SQLAlchemy (`awaf/db.py`), which backs the `history`, `compare`, and `report` commands and CI regression detection. The graph cache is a separate sidecar: content-hash-keyed JSON files in a `graph_cache/` directory next to `awaf.db`. There is no central coordinator and no shared state between pillar evaluations.
