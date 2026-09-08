@@ -89,7 +89,13 @@ Do NOT adjust the score holistically after computing the tally.
 
 _EVIDENCE_NOTE = (
     "Evidence may arrive as an agent-architecture graph plus cited code slices, or as raw "
-    "files. Treat both as equal evidence; cite file:line from the graph or slices when you can."
+    "files. Treat both as equal evidence; cite file:line from the graph or slices when you can.\n"
+    "A slice header '# File: path (lines a-b of N)' shows lines a to b of an N-line file. When "
+    "a-b is narrower than 1-N you have a PARTIAL view: the rest of the file exists but was not "
+    "shown to this pillar. Never state that code is missing, unimplemented, or 'not provided' "
+    "on the strength of a partial view. Say it is 'not visible in this pillar's evidence', name "
+    "the file in evidence_gaps, and cite only line numbers that appear in the slices you were "
+    "given."
 )
 
 _HAIKU_SUFFIX = """\

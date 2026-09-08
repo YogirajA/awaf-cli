@@ -193,3 +193,14 @@ def test_finding_line_kept_when_no_files_by_len() -> None:
     p = _prov(_EVAL_JSON.replace("999", "5"))
     r = FoundationAgent().evaluate(p, "GRAPH")  # files_by_len=None -> no validation
     assert r.findings[0]["line"] == 5
+
+
+def test_prompt_tells_model_partial_slices_are_not_absence() -> None:
+    # awaf-cli#19: a pillar shown lines 1-55 of a 142-line file claimed a method defined at
+    # line 109 was "not provided". The prompt must explain the partial slice header and
+    # forbid absence claims made from a partial view.
+    from awaf.pillars.foundation import FoundationAgent
+
+    prompt = FoundationAgent().system_prompt
+    assert "of N" in prompt  # explains the '(lines a-b of N)' slice header
+    assert "not visible" in prompt  # required phrasing for code outside the shown slice

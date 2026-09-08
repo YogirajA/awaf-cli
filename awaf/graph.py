@@ -247,7 +247,16 @@ _validate_pillar_maps()
 @dataclass
 class SliceResult:
     text: str
+    # Every file that contributed at least one slice.
     paths: set[str] = field(default_factory=set)
+    # Files shown only as anchored windows, i.e. NOT in full. A pillar reasoning about one of
+    # these has a partial view; the starvation retry may widen it to the whole file.
+    partial_paths: set[str] = field(default_factory=set)
+
+    @property
+    def whole_paths(self) -> set[str]:
+        """Files the pillar saw in full (no anchored window stands in for the file)."""
+        return self.paths - self.partial_paths
 
 
 def _fmt_attrs(attrs: dict[str, Any]) -> str:
@@ -285,9 +294,16 @@ def _merge_windows(lines_sorted: list[int], ctx: int, maxlen: int) -> list[tuple
     return windows
 
 
-def _render_window(path: str, lines: list[str], a: int, b: int) -> str:
+def render_file_window(path: str, lines: list[str], a: int, b: int) -> str:
+    """Render lines a..b (1-based, inclusive) of *path* under a header that states the extent.
+
+    The header always carries the file's total line count ("lines a-b of N") so the model can
+    tell a partial view from the whole file. Without it a 1-55 window of a 142-line file reads
+    as the whole file, and the model concludes that code further down does not exist
+    (awaf-cli#19).
+    """
     body = "\n".join(lines[a - 1 : b])
-    return f"# File: {path} (lines {a}-{b})\n{body}"
+    return f"# File: {path} (lines {a}-{b} of {len(lines)})\n{body}"
 
 
 def select_slices(
@@ -298,9 +314,16 @@ def select_slices(
     slice_budget: int = 12_000,
     context_lines: int = 20,
 ) -> SliceResult:
-    """Per-pillar cited-slices block. Node-anchored windows first, then role whole-files, budgeted."""
+    """Per-pillar cited-slices block. Node-anchored files first, then role whole-files, budgeted.
+
+    An anchored file whose role is also relevant to the pillar is shown WHOLE when it fits
+    (the role says the entire file is evidence; a window would hide the rest of it, and the
+    role pass never revisits an anchored file). Otherwise the file is shown as anchored
+    windows and reported in ``partial_paths`` so callers know the pillar's view is partial.
+    """
     node_types = NODE_TYPES_BY_PILLAR.get(pillar_name, set())
     roles = FILE_ROLES_BY_PILLAR.get(pillar_name, set())
+    role_by_path = {f.path: f.role for f in graph.files}
 
     anchors: dict[str, set[int]] = {}
     for n in graph.nodes:
@@ -310,19 +333,31 @@ def select_slices(
     chunks: list[str] = []
     used = 0
     included: set[str] = set()
+    partial: set[str] = set()
 
     for path in sorted(anchors):
         lines = read_lines(path)
         if not lines:
             continue
+        if role_by_path.get(path) in roles:
+            whole = render_file_window(path, lines, 1, len(lines))
+            t = count_tokens(whole)
+            if used + t <= slice_budget:
+                chunks.append(whole)
+                used += t
+                included.add(path)
+                continue
+            # The whole file does not fit: fall back to the anchored windows below.
         for a, b in _merge_windows(sorted(anchors[path]), context_lines, len(lines)):
-            text = _render_window(path, lines, a, b)
+            text = render_file_window(path, lines, a, b)
             t = count_tokens(text)
             if used + t > slice_budget:
-                return SliceResult("\n".join(chunks), included)
+                return SliceResult("\n".join(chunks), included, partial)
             chunks.append(text)
             used += t
             included.add(path)
+            if (a, b) != (1, len(lines)):
+                partial.add(path)
 
     for f in sorted(graph.files, key=lambda x: x.path):
         if f.role not in roles or f.path in included:
@@ -330,7 +365,7 @@ def select_slices(
         lines = read_lines(f.path)
         if not lines:
             continue
-        text = _render_window(f.path, lines, 1, len(lines))
+        text = render_file_window(f.path, lines, 1, len(lines))
         t = count_tokens(text)
         if used + t > slice_budget:
             continue
@@ -338,7 +373,7 @@ def select_slices(
         used += t
         included.add(f.path)
 
-    return SliceResult("\n".join(chunks), included)
+    return SliceResult("\n".join(chunks), included, partial)
 
 
 def _cache_file(content_hash: str, cache_dir: str) -> str:

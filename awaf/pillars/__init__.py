@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from awaf.config import GraphConfig
-from awaf.graph import ArchitectureGraph, render_graph_block, select_slices
+from awaf.graph import ArchitectureGraph, render_file_window, render_graph_block, select_slices
 from awaf.pillars.base import PillarAgent, PillarResult
 from awaf.pillars.context_integrity import ContextIntegrityAgent
 from awaf.pillars.controllability import ControllabilityAgent
@@ -65,10 +65,14 @@ def _starvation_retry(
     """
     One-shot retry for a starved pillar.
 
-    If *res* reports low confidence with evidence gaps that name a scanned file not
-    already covered by the pillar's cited slices (matched by whole file/basename token,
-    not substring), append that file's whole content to the user context and re-run
-    evaluate() once. Otherwise return *res* unchanged. Bounded to a single retry.
+    If *res* reports low confidence with evidence gaps that name a scanned file the pillar
+    did not see in full (matched by whole file/basename token, not substring), append that
+    file's whole content to the user context and re-run evaluate() once. Otherwise return
+    *res* unchanged. Bounded to a single retry.
+
+    *included_paths* must be the files shown WHOLE. A file shown only as anchored windows
+    counts as not covered: the pillar's view of it is partial, and a gap naming it is exactly
+    the signal this retry exists for (awaf-cli#19).
 
     The retry's usage is added to the original call's so both LLM calls are billed to the
     caller's cost/budget accounting, and a retry that failed to parse never replaces the
@@ -96,7 +100,7 @@ def _starvation_retry(
         lines = read_lines(path)
         if not lines:
             continue
-        text = f"# File: {path} (lines 1-{len(lines)})\n" + "\n".join(lines)
+        text = render_file_window(path, lines, 1, len(lines))
         t = count_tokens(text)
         if used + t > slice_budget:
             continue
@@ -251,7 +255,7 @@ def run_assessment(
                 res = _starvation_retry(
                     agent,
                     res,
-                    sr.paths,
+                    sr.whole_paths,
                     provider,
                     model,
                     read_lines,
