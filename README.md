@@ -238,7 +238,7 @@ Replacing the raw-code dump with the graph cuts per-run input tokens by roughly 
 
 ### Quality and Reliability
 
-No more silent truncation on large repositories (the extractor sees the whole repo, not just the first 40k tokens). Findings gain validated `file:line` anchors (validated against the analyzed view of each file, which awaf minifies, so line numbers are close but not always exactly the raw-source line). Each pillar receives focused evidence instead of the full dump. The graph is on by default and fully optional: any extraction or cache failure automatically falls back to the raw-dump path, so a run is never worse than before.
+No more silent truncation on large repositories (the extractor sees the whole repo, not just the first 40k tokens). Findings gain validated `file:line` anchors (validated against the analyzed view of each file, which awaf minifies, so line numbers are close but not always exactly the raw-source line). Each pillar receives focused evidence instead of the full dump: the whole file when its role is relevant to that pillar, otherwise windows around the pillar's anchored nodes. Every slice header states how much of the file it shows (`lines a-b of N`), and pillars are told never to claim code is absent from a file they saw only partially; a low-confidence pillar whose evidence gaps name a file it did not see in full gets one retry with that file appended whole. The graph is on by default and fully optional: any extraction or cache failure automatically falls back to the raw-dump path, so a run is never worse than before.
 
 ### Usage
 
@@ -273,7 +273,7 @@ extract_tokens = 150000    # one-time budget for the extraction call
 slice_budget = 12000       # per-pillar cited-code budget
 context_lines = 20         # lines around each anchored node
 cache_max = 8              # graphs kept in the on-disk cache
-starvation_retry = true    # re-feed raw slices to a low-confidence pillar once
+starvation_retry = true    # feed a gap-named file in full to a low-confidence pillar once
 ```
 
 Environment variable overrides (take precedence over `awaf.toml`):

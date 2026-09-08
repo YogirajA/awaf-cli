@@ -249,3 +249,99 @@ def test_select_slices_merges_nearby_anchor_windows() -> None:
         g, "Foundation", lambda p: files[p], tok, slice_budget=10_000, context_lines=1
     )
     assert separate.text.count("# File: m.py") == 2
+
+
+def test_window_header_states_partial_extent() -> None:
+    # A windowed slice must say how much of the file it shows, so a pillar can tell a partial
+    # view from the whole file (awaf-cli#19: a 1-55 window of a 142-line file was read as the
+    # whole file and the model claimed code further down was "not provided").
+    g = ArchitectureGraph(
+        nodes=[GraphNode(id="g", type="guardrail", name="G", file="m.py", line=3)],
+        files=[FileEntry(path="m.py", role="other")],
+    )
+    files = {"m.py": [f"l{i}" for i in range(1, 21)]}  # 20 lines
+    tok = lambda s: len(s.split())  # noqa: E731
+    r = select_slices(
+        g, "Op. Excellence", lambda p: files[p], tok, slice_budget=10_000, context_lines=2
+    )
+    assert "# File: m.py (lines 1-5 of 20)" in r.text
+
+
+def test_whole_file_header_states_full_extent() -> None:
+    g = ArchitectureGraph(files=[FileEntry(path="ci.yml", role="ops")])
+    files = {"ci.yml": ["a", "b", "c"]}
+    tok = lambda s: len(s.split())  # noqa: E731
+    r = select_slices(g, "Op. Excellence", lambda p: files[p], tok, slice_budget=10_000)
+    assert "# File: ci.yml (lines 1-3 of 3)" in r.text
+
+
+def test_select_slices_reports_partially_shown_files() -> None:
+    g = ArchitectureGraph(
+        nodes=[GraphNode(id="g", type="guardrail", name="G", file="m.py", line=3)],
+        files=[FileEntry(path="m.py", role="other"), FileEntry(path="ci.yml", role="ops")],
+    )
+    files = {"m.py": [f"l{i}" for i in range(1, 21)], "ci.yml": ["a", "b"]}
+    tok = lambda s: len(s.split())  # noqa: E731
+    r = select_slices(
+        g, "Op. Excellence", lambda p: files[p], tok, slice_budget=10_000, context_lines=2
+    )
+    assert r.paths == {"m.py", "ci.yml"}
+    assert r.partial_paths == {"m.py"}  # shown only as a window
+    assert r.whole_paths == {"ci.yml"}  # shown in full
+
+
+def test_select_slices_shows_role_relevant_anchor_file_whole() -> None:
+    # agent.py is both an anchor file and role-selected by Foundation. The role says the whole
+    # file is evidence for this pillar, so the whole file must win over the window (before,
+    # the window was kept and the role pass skipped the file as already "included").
+    g = ArchitectureGraph(
+        nodes=[GraphNode(id="a", type="agent", name="A", file="agent.py", line=2)],
+        files=[FileEntry(path="agent.py", role="agent")],
+    )
+    files = {"agent.py": [f"l{i}" for i in range(1, 51)]}  # 50 lines
+    tok = lambda s: len(s.split())  # noqa: E731
+    r = select_slices(
+        g, "Foundation", lambda p: files[p], tok, slice_budget=10_000, context_lines=2
+    )
+    assert "# File: agent.py (lines 1-50 of 50)" in r.text
+    assert r.text.count("# File: agent.py") == 1
+    assert r.partial_paths == set()
+
+
+def test_select_slices_falls_back_to_window_when_whole_role_file_overflows() -> None:
+    # Same setup, but the whole file does not fit the budget while the window does: keep the
+    # window (labelled partial) rather than dropping the file or stopping.
+    g = ArchitectureGraph(
+        nodes=[GraphNode(id="a", type="agent", name="A", file="agent.py", line=2)],
+        files=[FileEntry(path="agent.py", role="agent")],
+    )
+    files = {"agent.py": [f"l{i}" for i in range(1, 51)]}
+    tok = lambda s: len(s.split())  # noqa: E731
+    # window = 7-token header + 4 lines = 11 tokens; whole file = 7 + 50 = 57 tokens.
+    r = select_slices(g, "Foundation", lambda p: files[p], tok, slice_budget=20, context_lines=2)
+    assert "# File: agent.py (lines 1-4 of 50)" in r.text
+    assert r.partial_paths == {"agent.py"}
+
+
+def test_issue_19_guardrail_anchors_yield_labelled_partial_window() -> None:
+    # Reproduces awaf-cli#19: metrics.py (142 lines, role "other") carried guardrail anchors
+    # at lines 1, 30 and 35. With 20 context lines those merge into one 1-55 window, so
+    # Op. Excellence never saw snapshot() at line 109. The window must be labelled partial and
+    # the file reported as partially shown, so the starvation retry is allowed to widen it.
+    g = ArchitectureGraph(
+        nodes=[
+            GraphNode(id="g1", type="guardrail", name="Instr", file="metrics.py", line=1),
+            GraphNode(id="g2", type="guardrail", name="Budget", file="metrics.py", line=30),
+            GraphNode(id="g3", type="guardrail", name="Loop", file="metrics.py", line=35),
+        ],
+        files=[FileEntry(path="metrics.py", role="other")],
+    )
+    lines = [f"line {i}" for i in range(1, 143)]
+    lines[108] = "    def snapshot(self) -> dict:"
+    tok = lambda s: len(s.split())  # noqa: E731
+    r = select_slices(
+        g, "Op. Excellence", lambda p: lines, tok, slice_budget=12_000, context_lines=20
+    )
+    assert "# File: metrics.py (lines 1-55 of 142)" in r.text
+    assert "def snapshot" not in r.text  # the definition really is outside the window
+    assert r.partial_paths == {"metrics.py"}
